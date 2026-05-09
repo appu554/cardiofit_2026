@@ -32,6 +32,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/cardiofit/kb32/internal/api"
+	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
@@ -125,7 +126,35 @@ func main() {
 	// Replace with a real scorer in Phase 2b.
 	appSrc := api.DefaultAppropriatenessSource{}
 
-	pipeline := api.NewPipeline(assembler, chain, appSrc, nil)
+	// Citation registry — Phase 2a placeholder: InMemoryRegistry with two seed
+	// source versions covering the PostFall and primary drug-safety rule sets.
+	// Phase 2-completion will swap this for citations.NewPostgresRegistry(db)
+	// backed by migration 043.
+	citationRegistry := citations.NewInMemoryRegistry()
+	seedCtx := context.Background()
+	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, sv := range []citations.SourceVersion{
+		{
+			SourceID:      "ADG-2025-AU",
+			Version:       "1",
+			EffectiveFrom: seedTime,
+			ContentHash:   "seed",
+			Status:        citations.StatusActive,
+		},
+		{
+			SourceID:      "STOPP-START-2023",
+			Version:       "1",
+			EffectiveFrom: seedTime,
+			ContentHash:   "seed",
+			Status:        citations.StatusActive,
+		},
+	} {
+		if err := citationRegistry.Register(seedCtx, sv); err != nil {
+			log.Printf("kb-32: citation registry seed warning: %v", err)
+		}
+	}
+
+	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry)
 	handler := api.NewHandler(pipeline)
 
 	// Override store — InMemory in Phase 2b; replace with PostgresStore (VAIDSHALA_DSN)

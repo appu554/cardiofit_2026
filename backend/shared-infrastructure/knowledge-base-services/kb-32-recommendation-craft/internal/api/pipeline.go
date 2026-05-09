@@ -15,11 +15,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/appropriateness"
+	"github.com/cardiofit/kb32/internal/citations"
 	"github.com/cardiofit/kb32/internal/formatter"
 	"github.com/cardiofit/kb32/internal/framing"
 	"github.com/cardiofit/kb32/internal/generator"
@@ -52,6 +54,13 @@ type PipelineResult struct {
 	// HoldReason is non-empty when the appropriateness gate held the
 	// recommendation. When non-empty the caller should set State="detected".
 	HoldReason string
+
+	// Citations is the slice of fire-time citation pins produced after Stage 5.
+	// Each entry links this recommendation to the exact source version that was
+	// active at the moment the recommendation fired. Empty when the pipeline was
+	// constructed without a Registry (nil-registry dev/test mode) or when
+	// ClinicalContent.EvidenceAnchors is empty.
+	Citations []citations.RecommendationCitation
 }
 
 // AppropriatenessSource is the port through which the Pipeline scores a
@@ -94,16 +103,20 @@ func (DefaultAppropriatenessSource) Assess(_ context.Context, _ *generator.Packe
 //  3. generator.Generate     – produce draft Packet from top rule + Snapshot
 //  4. AppropriatenessSource  – GATE: score assessment; hold if any dim ≤ 2
 //  5. framing.ContentHash    – compute deterministic SHA-256 content hash
+//  5b. citations.PinAtFireTime – pin source versions active at fire time (audit trail)
 //  6. formatter.Validate     – enforce Layer 1/2 word budgets
 type Pipeline struct {
 	assembler  *kb32ctx.Assembler
 	chain      *reasoning.ChainBuilder
 	appSrc     AppropriatenessSource
-	candidates []string // candidate rule IDs passed to ChainBuilder
+	registry   citations.Registry // nil = dev/test mode, pinning skipped gracefully
+	candidates []string           // candidate rule IDs passed to ChainBuilder
 }
 
 // NewPipeline constructs a Pipeline with the supplied collaborators.
 // candidates is the ordered list of CQL rule IDs to evaluate in Stage 2.
+// registry may be nil; when nil, citation pinning is skipped without error
+// (dev/test mode). Production callers must supply a non-nil Registry.
 func NewPipeline(
 	assembler *kb32ctx.Assembler,
 	chain *reasoning.ChainBuilder,
@@ -115,6 +128,26 @@ func NewPipeline(
 		chain:      chain,
 		appSrc:     appSrc,
 		candidates: candidates,
+	}
+}
+
+// NewPipelineWithRegistry constructs a Pipeline with a citation Registry wired
+// in. Use this constructor in production and in tests that assert citation
+// pinning behaviour. The registry must implement citations.Registry; an
+// in-memory implementation is available via citations.NewInMemoryRegistry().
+func NewPipelineWithRegistry(
+	assembler *kb32ctx.Assembler,
+	chain *reasoning.ChainBuilder,
+	appSrc AppropriatenessSource,
+	candidates []string,
+	registry citations.Registry,
+) *Pipeline {
+	return &Pipeline{
+		assembler:  assembler,
+		chain:      chain,
+		appSrc:     appSrc,
+		candidates: candidates,
+		registry:   registry,
 	}
 }
 
@@ -193,6 +226,25 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 	}
 	hash := framing.ContentHash(content)
 
+	// Stage 5b: citation pinning — lock in the source versions active at fire
+	// time. This creates an immutable audit trail linking the recommendation to
+	// the exact evidence sources that justified it at the moment it fired.
+	//
+	// When registry is nil (dev/test mode with NewPipeline) pinning is skipped
+	// gracefully and Citations will be an empty slice. Production callers must
+	// use NewPipelineWithRegistry to satisfy the audit-defensibility commitment
+	// from Phase 2b Task 6.
+	var pinnedCitations []citations.RecommendationCitation
+	if p.registry != nil && len(content.EvidenceAnchors) > 0 {
+		fireTime := time.Now().UTC()
+		recID := pkt.RecommendationID.String()
+		pinned, pinErr := citations.PinAtFireTime(ctx, p.registry, recID, content.EvidenceAnchors, fireTime)
+		if pinErr != nil {
+			return nil, fmt.Errorf("pipeline stage5b (citations): %w", pinErr)
+		}
+		pinnedCitations = pinned
+	}
+
 	// Stage 6: formatter validation — enforce Layer 1/2 word budgets.
 	// Build a LayerOutput from the packet sections.
 	layerOut := buildLayerOutput(pkt, snap)
@@ -206,6 +258,7 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 		LayerOutput: layerOut,
 		UrgencyTag:  urgencyTag,
 		Assessment:  assessment,
+		Citations:   pinnedCitations,
 	}, nil
 }
 
