@@ -1,5 +1,21 @@
 // Command kb-30-authorisation-evaluator is the runtime authorisation
 // evaluator service. Listens on port 8138 by default.
+//
+// # Permissions enforcement flag
+//
+// Set KB30_PERMISSIONS_ENFORCED=true to enable VisibilityClass middleware on
+// all read (GET) audit routes.  When the flag is absent or "false", the
+// service uses a passthrough middleware so existing CI tests — which do not
+// carry JWT tokens or permission records — continue to pass unmodified.
+//
+// Boot-time warning:
+//
+//	permissions enforcement: OFF (passthrough mode — DO NOT use in production)
+//	permissions enforcement: ON
+//
+// When KB30_PERMISSIONS_ENFORCED=true but VAIDSHALA_DSN is empty the service
+// fails fast; the permissions store cannot function without a database
+// connection.
 package main
 
 import (
@@ -17,6 +33,8 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/cardiofit/shared/v2_substrate/permissions"
 
 	"kb-authorisation-evaluator/internal/api"
 	"kb-authorisation-evaluator/internal/audit"
@@ -73,7 +91,48 @@ func main() {
 	auditSvc := audit.NewService()
 	eval := evaluator.New(s, resolver)
 
-	server := &api.Server{Evaluator: eval, Cache: c, Audit: auditSvc}
+	// ---------------------------------------------------------------------------
+	// Permissions middleware wiring (KB30_PERMISSIONS_ENFORCED)
+	// ---------------------------------------------------------------------------
+
+	var permMW *permissions.Middleware
+
+	enforced := strings.EqualFold(os.Getenv("KB30_PERMISSIONS_ENFORCED"), "true")
+	if enforced {
+		// Boot-time validation: permissions enforcement requires a Vaidshala DSN.
+		vDSN := os.Getenv("VAIDSHALA_DSN")
+		if vDSN == "" {
+			log.Fatalf(
+				"kb-30: KB30_PERMISSIONS_ENFORCED=true but VAIDSHALA_DSN is empty — " +
+					"the permissions store requires a database connection; " +
+					"either set VAIDSHALA_DSN or set KB30_PERMISSIONS_ENFORCED=false",
+			)
+		}
+
+		permDB, err := sql.Open("postgres", vDSN)
+		if err != nil {
+			log.Fatalf("kb-30: open VAIDSHALA_DSN for permissions: %v", err)
+		}
+		if err := permDB.Ping(); err != nil {
+			log.Fatalf("kb-30: ping VAIDSHALA_DSN for permissions: %v", err)
+		}
+
+		permStore := permissions.NewPostgresStore(permDB)
+		consentStore := permissions.NewPostgresDataConsentStore(permDB)
+		permMW = permissions.NewMiddleware(permStore, consentStore, nil /* NoopAuditEmitter */)
+		log.Printf("kb-30: permissions enforcement: ON (VAIDSHALA_DSN connected)")
+	} else {
+		log.Printf(
+			"kb-30: permissions enforcement: OFF (passthrough mode — DO NOT use in production)",
+		)
+	}
+
+	server := &api.Server{
+		Evaluator: eval,
+		Cache:     c,
+		Audit:     auditSvc,
+		PermMW:    permMW,
+	}
 
 	httpSrv := &http.Server{
 		Addr:              ":" + port,
