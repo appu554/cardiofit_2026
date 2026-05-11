@@ -53,16 +53,11 @@ func (NoOpEvidenceTraceLinker) LinkedNodes(_ context.Context, _ uuid.UUID, _ int
 
 // ExplainResponse is the JSON body returned by GET /v1/explain/:decision_id.
 //
-// Note on Citations: the v2_substrate decision_metadata.Metadata struct does
-// not currently carry a recommendation-ID linkage (see recorder.go — fields
-// are DecisionID, Component, DecisionType, AffectedSubjectID/Class,
-// PrinciplesImplicated, ERMReviewed, ERMOutcome, ContestationEnabled,
-// AuditTraceRef, Timestamp). Because citations.Registry.ListCitations is keyed
-// on recommendation-ID rather than decision-ID, this endpoint cannot resolve
-// citations from a decision_id alone with the current substrate. The field is
-// returned as an empty slice; a future substrate change that adds a
-// RecommendationID field on Metadata will let us wire the lookup without
-// changing the response shape.
+// Citations are resolved by reading md.RecommendationID and calling
+// citations.Registry.ListCitations. When the decision is not linked to a
+// recommendation (md.RecommendationID == uuid.Nil), Citations is returned
+// as an empty slice. A registry error degrades to an empty slice as well —
+// best-effort lookup, never a 500.
 type ExplainResponse struct {
 	DecisionID  uuid.UUID                          `json:"decision_id"`
 	Metadata    *decision_metadata.Metadata        `json:"metadata"`
@@ -146,20 +141,21 @@ func (h *ExplainHandler) HandleExplain(c *gin.Context) {
 		}
 	}
 
-	// Citations — registry lookup is keyed on recommendation-ID, but the
-	// current decision_metadata.Metadata struct does not carry a
-	// recommendation-ID. Until the substrate is extended, return [].
-	// See ExplainResponse type doc-comment for the full deferral note.
-	//
-	// The log line below is staged here so it activates the moment a future
-	// Metadata.RecommendationID field unblocks the ListCitations call:
-	//
-	//   cites, err := h.citationReg.ListCitations(ctx, md.RecommendationID)
-	//   if err != nil {
-	//       log.Printf("explain: citations.ListCitations failed for decision_id=%s: %v", decisionID, err)
-	//       cites = []citations.RecommendationCitation{}
-	//   }
+	// Citations — keyed on md.RecommendationID. uuid.Nil is the documented
+	// sentinel for "decision is not a kb-32 recommendation"; we skip the
+	// lookup and return an empty slice in that case. A registry error also
+	// degrades to an empty slice (best-effort): an auditor sees the
+	// decision and ethics log without citations rather than a 500.
 	cites := []citations.RecommendationCitation{}
+	if md.RecommendationID != uuid.Nil && h.citationReg != nil {
+		got, err := h.citationReg.ListCitations(ctx, md.RecommendationID.String())
+		if err != nil {
+			log.Printf("explain: citations.ListCitations failed for decision_id=%s rec_id=%s: %v", decisionID, md.RecommendationID, err)
+			cites = []citations.RecommendationCitation{}
+		} else if got != nil {
+			cites = got
+		}
+	}
 
 	// Linked evidence-trace nodes — depth per Phase 3 plan.
 	linked := []uuid.UUID{}

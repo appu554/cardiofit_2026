@@ -21,6 +21,7 @@ func TestRecorder_RecordRoundTrip(t *testing.T) {
 
 	id := uuid.New()
 	traceRef := uuid.New()
+	recID := uuid.New()
 	subjectID := uuid.New().String()
 	if err := rec.Record(context.Background(), Metadata{
 		DecisionID:           id,
@@ -34,6 +35,7 @@ func TestRecorder_RecordRoundTrip(t *testing.T) {
 		ContestationEnabled:  true,
 		AuditTraceRef:        traceRef,
 		Timestamp:            time.Now().UTC(),
+		RecommendationID:     recID,
 	}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
@@ -47,6 +49,37 @@ func TestRecorder_RecordRoundTrip(t *testing.T) {
 	}
 	if len(got.PrinciplesImplicated) != 2 {
 		t.Errorf("principles roundtrip fail: %v", got.PrinciplesImplicated)
+	}
+	if got.RecommendationID != recID {
+		t.Errorf("RecommendationID roundtrip fail: got %s want %s", got.RecommendationID, recID)
+	}
+}
+
+// TestRecorder_RecommendationIDZeroValueWhenAbsent verifies the documented
+// sentinel semantics: when a caller omits RecommendationID, it round-trips
+// as uuid.Nil (the "no associated recommendation" sentinel the /v1/explain
+// reader keys off).
+func TestRecorder_RecommendationIDZeroValueWhenAbsent(t *testing.T) {
+	store := NewInMemoryStore()
+	rec := NewRecorder(store)
+	id := uuid.New()
+	if err := rec.Record(context.Background(), Metadata{
+		DecisionID:           id,
+		Component:            "kb-30",
+		DecisionType:         "non_recommendation_decision",
+		AffectedSubjectID:    uuid.New().String(),
+		AffectedSubjectClass: "resident",
+		Timestamp:            time.Now().UTC(),
+		// RecommendationID intentionally omitted — this decision is not a kb-32 recommendation
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	got, err := store.Get(context.Background(), id)
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	if got.RecommendationID != uuid.Nil {
+		t.Errorf("expected RecommendationID == uuid.Nil sentinel, got %s", got.RecommendationID)
 	}
 }
 

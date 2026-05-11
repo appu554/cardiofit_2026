@@ -45,10 +45,8 @@ func (s stubLinker) LinkedNodes(_ context.Context, _ uuid.UUID, _ int) ([]uuid.U
 }
 
 // erroringRegistry wraps an InMemoryRegistry and returns an error from
-// ListCitations to verify graceful degradation. With the current Metadata
-// shape (no recommendation-ID linkage), the handler never calls
-// ListCitations at all, so this stub also documents that invariant: even
-// if we DID call it, an error would not surface to the caller.
+// ListCitations to verify graceful degradation: a registry failure must
+// degrade to an empty citations slice rather than surface as a 500.
 type erroringRegistry struct {
 	citations.Registry
 }
@@ -63,6 +61,7 @@ func TestExplain_KnownDecision_Returns200WithFullPayload(t *testing.T) {
 	reg := citations.NewInMemoryRegistry()
 
 	decisionID := uuid.New()
+	recID := uuid.New()
 	now := time.Now().UTC()
 	outcome := "approved"
 	if err := mdStore.Put(context.Background(), decision_metadata.Metadata{
@@ -77,8 +76,26 @@ func TestExplain_KnownDecision_Returns200WithFullPayload(t *testing.T) {
 		ContestationEnabled:  true,
 		AuditTraceRef:        uuid.New(),
 		Timestamp:            now,
+		RecommendationID:     recID,
 	}); err != nil {
 		t.Fatalf("seed metadata: %v", err)
+	}
+
+	// Seed two pinned citations for recID so the handler returns them via
+	// the now-wired ListCitations call.
+	for _, c := range []citations.RecommendationCitation{
+		{RecommendationID: recID.String(), SourceID: "src-A", Version: "v1", PinnedAt: now},
+		{RecommendationID: recID.String(), SourceID: "src-B", Version: "v2", PinnedAt: now},
+	} {
+		if err := reg.SaveCitation(context.Background(), c); err != nil {
+			t.Fatalf("seed citation: %v", err)
+		}
+	}
+	// Unrelated citation under a different rec — must NOT appear.
+	if err := reg.SaveCitation(context.Background(), citations.RecommendationCitation{
+		RecommendationID: uuid.New().String(), SourceID: "src-X", Version: "v1", PinnedAt: now,
+	}); err != nil {
+		t.Fatalf("seed unrelated citation: %v", err)
 	}
 
 	logger := ethics_log.NewLogger(logStore)
@@ -136,6 +153,14 @@ func TestExplain_KnownDecision_Returns200WithFullPayload(t *testing.T) {
 	}
 	if resp.Citations == nil {
 		t.Error("citations must be a non-nil slice (even if empty)")
+	}
+	if len(resp.Citations) != 2 {
+		t.Errorf("expected 2 citations for rec_id=%s, got %d (%+v)", recID, len(resp.Citations), resp.Citations)
+	}
+	for _, c := range resp.Citations {
+		if c.RecommendationID != recID.String() {
+			t.Errorf("citation rec-ID mismatch: got %s want %s", c.RecommendationID, recID)
+		}
 	}
 }
 
@@ -227,11 +252,11 @@ func TestExplain_LinkedTraceTruncated(t *testing.T) {
 	}
 }
 
-// TestExplain_MetadataWithoutRecommendationLink_EmptyCitations verifies the
-// ship-state behaviour: because decision_metadata.Metadata does not currently
-// carry a recommendation-ID, the handler returns "citations": [] for every
-// decision. When the substrate is extended, this test becomes a backward-
-// compatibility guard and a positive-case test should be added alongside it.
+// TestExplain_MetadataWithoutRecommendationLink_EmptyCitations is the
+// backwards-compatibility guard for the uuid.Nil sentinel: when a decision
+// is not linked to a recommendation (e.g., legacy fixtures or non-
+// recommendation decisions), the handler must return 200 with an empty
+// citations slice and must NOT call into the registry.
 func TestExplain_MetadataWithoutRecommendationLink_EmptyCitations(t *testing.T) {
 	mdStore := decision_metadata.NewInMemoryStore()
 	decisionID := uuid.New()
@@ -273,20 +298,19 @@ func TestExplain_RegistryError_DegradesGracefully(t *testing.T) {
 	mdStore := decision_metadata.NewInMemoryStore()
 	decisionID := uuid.New()
 	if err := mdStore.Put(context.Background(), decision_metadata.Metadata{
-		DecisionID:    decisionID,
-		Component:     "kb-32",
-		DecisionType:  "draft",
-		AuditTraceRef: uuid.New(),
-		Timestamp:     time.Now().UTC(),
+		DecisionID:       decisionID,
+		Component:        "kb-32",
+		DecisionType:     "draft",
+		AuditTraceRef:    uuid.New(),
+		Timestamp:        time.Now().UTC(),
+		RecommendationID: uuid.New(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Even with a registry that errors on every ListCitations call, the
-	// handler must return 200 with empty citations. Under current substrate
-	// the handler does not call ListCitations at all (no rec-ID linkage),
-	// so this test guards both the present invariant AND the future
-	// behaviour once the Metadata struct is extended.
+	// With a non-nil RecommendationID the handler now calls ListCitations.
+	// The wrapped registry errors on every call — the handler must still
+	// return 200 with an empty citations slice.
 	reg := erroringRegistry{Registry: citations.NewInMemoryRegistry()}
 	r := newExplainTestRouter(t,
 		mdStore,
