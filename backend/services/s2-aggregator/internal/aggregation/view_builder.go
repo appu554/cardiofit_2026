@@ -9,6 +9,24 @@ import (
 	"os"
 )
 
+// EscalationCapturer is the boundary interface defaultViewBuilder uses
+// to delegate Phase 1 LOG-ONLY escalation capture to the audit package.
+// The audit package's EscalationEventEmitter satisfies this interface
+// at the boundary (set via WithEscalationCapturer); the default sink is
+// the stdout logger from Task 1.
+type EscalationCapturer interface {
+	Capture(ctx context.Context, ev EscalationEvent) error
+}
+
+// ViewRenderEmitter is the boundary interface defaultViewBuilder uses
+// to emit EventViewRender audit rows from BuildLayer1Baseline. The
+// audit package's Emitter satisfies a compatible adapter; this local
+// interface keeps the aggregation package free of an audit-package
+// import.
+type ViewRenderEmitter interface {
+	EmitViewRender(ctx context.Context, req WorkspaceRequest, layer int) error
+}
+
 // S2ViewBuilder is the layer-aware view-construction interface per the
 // S2 Adaptive Cognition Architectural Commitment Addendum, Part 8.1
 // (lines 386–397).
@@ -43,6 +61,38 @@ type defaultViewBuilder struct {
 	// The field is exported via NewDefaultViewBuilderWithLogger so tests
 	// can capture output.
 	logger *log.Logger
+
+	// escalationCapturer, when set, receives every LogEscalation call
+	// in addition to the stdout log line. Task 7 wires this to the
+	// audit package's EscalationEventEmitter so escalation captures
+	// reach the s2_audit_events table.
+	escalationCapturer EscalationCapturer
+
+	// viewRenderEmitter, when set, receives an EventViewRender audit
+	// row on every BuildLayer1Baseline call. Task 7 wires this to the
+	// audit package's Emitter via an adapter.
+	viewRenderEmitter ViewRenderEmitter
+}
+
+// WithEscalationCapturer returns a view builder that delegates
+// LogEscalation to capturer in addition to writing the stdout log
+// line. nil capturer disables the delegate (preserves Task 1 behaviour).
+func WithEscalationCapturer(b S2ViewBuilder, capturer EscalationCapturer) S2ViewBuilder {
+	if dv, ok := b.(*defaultViewBuilder); ok {
+		dv.escalationCapturer = capturer
+		return dv
+	}
+	return b
+}
+
+// WithViewRenderEmitter returns a view builder that emits an audit row
+// per BuildLayer1Baseline call. nil emitter disables the audit fan-out.
+func WithViewRenderEmitter(b S2ViewBuilder, emitter ViewRenderEmitter) S2ViewBuilder {
+	if dv, ok := b.(*defaultViewBuilder); ok {
+		dv.viewRenderEmitter = emitter
+		return dv
+	}
+	return b
 }
 
 // NewDefaultViewBuilder returns a Phase 1 view builder that logs escalation
@@ -60,9 +110,20 @@ func NewDefaultViewBuilderWithLogger(w io.Writer) S2ViewBuilder {
 
 // BuildLayer1Baseline returns a zero-value Layer1View in Task 1.
 // Tasks 3–7 populate the view fields per S2 v1.0 Parts 4–13.
+//
+// Task 7: when a ViewRenderEmitter is wired, emit an EventViewRender
+// audit row before returning. Audit-emission failure is best-effort —
+// logged to stdout but not returned — because v1.0 Part 13.1 view-
+// render audit is downstream observability, not a load-bearing
+// substrate write.
 func (b *defaultViewBuilder) BuildLayer1Baseline(
-	_ context.Context, _ WorkspaceRequest,
+	ctx context.Context, req WorkspaceRequest,
 ) (Layer1View, error) {
+	if b.viewRenderEmitter != nil {
+		if err := b.viewRenderEmitter.EmitViewRender(ctx, req, 1); err != nil && b.logger != nil {
+			b.logger.Printf("view_render audit emission failed (best-effort): %v", err)
+		}
+	}
 	return Layer1View{}, nil
 }
 
@@ -121,7 +182,7 @@ func (b *defaultViewBuilder) EscalateToLayer(
 // Format: a single line with the structured fields named, so log scrapers
 // can pivot on field names without parsing prose.
 func (b *defaultViewBuilder) LogEscalation(
-	_ context.Context, e EscalationEvent,
+	ctx context.Context, e EscalationEvent,
 ) error {
 	if b.logger == nil {
 		return errors.New("s2-aggregator: LogEscalation called with nil logger — construct via NewDefaultViewBuilder")
@@ -133,5 +194,15 @@ func (b *defaultViewBuilder) LogEscalation(
 		e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
 		e.AuditTraceID,
 	)
+	// Task 7: delegate to the audit-package EscalationEventEmitter when
+	// wired. Phase 1 commitment per Addendum Part 5.5 is LOG-ONLY; the
+	// emitter writes only, and the audit package has no read path for
+	// per-pharmacist escalation patterns (enforced by the structural
+	// no-surveillance-reader test).
+	if b.escalationCapturer != nil {
+		if err := b.escalationCapturer.Capture(ctx, e); err != nil {
+			return fmt.Errorf("escalation capture: %w", err)
+		}
+	}
 	return nil
 }

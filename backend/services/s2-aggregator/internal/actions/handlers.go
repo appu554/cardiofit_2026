@@ -3,10 +3,12 @@ package actions
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/cardiofit/s2-aggregator/internal/aggregation"
+	"github.com/cardiofit/s2-aggregator/internal/audit"
 	"github.com/google/uuid"
 )
 
@@ -34,11 +36,16 @@ type Handler struct {
 	sessions          SessionStore
 	overrideForwarder OverrideForwarder
 	viewBuilder       aggregation.S2ViewBuilder
+	auditEmitter      audit.Emitter
 }
 
 // NewHandler returns a Handler wired with the supplied dependencies.
-// All four collaborators are required; nil values panic at construction
-// rather than at first call so wiring bugs surface at boot.
+// All four core collaborators are required; nil values panic at
+// construction rather than at first call so wiring bugs surface at boot.
+//
+// auditEmitter is OPTIONAL: when nil the handler skips audit-emission
+// (used by tests that don't exercise the audit path). Production
+// wiring (Task 8) always supplies a CompositeEmitter.
 func NewHandler(
 	store ActionStore,
 	sessions SessionStore,
@@ -54,6 +61,22 @@ func NewHandler(
 		overrideForwarder: overrideForwarder,
 		viewBuilder:       viewBuilder,
 	}
+}
+
+// WithAuditEmitter returns h configured to fan pharmacist-action audit
+// rows out to emitter. Audit emission is best-effort at this boundary
+// (Task 7 contract): a failure is logged but does NOT fail the
+// pharmacist action — the local s2_audit_events row written by the
+// kb-32-distinct postgres action store is the canonical audit, and the
+// emitter here is the downstream fan-out.
+//
+// This inverts the kb-32 Stage 7 fail-hard contract because the
+// architectural rationale differs: in kb-32 the EvidenceTrace IS the
+// audit substrate; in s2-aggregator the pharmacist_actions table is
+// local-canonical and the ethics_log fan-out is a secondary copy.
+func (h *Handler) WithAuditEmitter(emitter audit.Emitter) *Handler {
+	h.auditEmitter = emitter
+	return h
 }
 
 // Execute runs the supplied ActionRequest through reasoning validation,
@@ -105,7 +128,7 @@ func (h *Handler) Execute(ctx context.Context, req ActionRequest) (ActionAcknowl
 	ack := ActionAcknowledgment{
 		ActionID:     uuid.New(),
 		AcceptedAt:   time.Now().UTC(),
-		AuditTraceID: uuid.New(), // Task 7 wires EvidenceTrace; placeholder for now.
+		AuditTraceID: uuid.New(),
 	}
 
 	if err := h.store.Record(ctx, req, ack.ActionID); err != nil {
@@ -114,6 +137,11 @@ func (h *Handler) Execute(ctx context.Context, req ActionRequest) (ActionAcknowl
 	if err := h.sessions.RecordActionInSession(ctx, req.SessionID, req.Action); err != nil {
 		return ActionAcknowledgment{}, err
 	}
+
+	// Emit the EvidenceTrace audit fan-out AFTER the local row + session
+	// counter are safely persisted. Best-effort per Task 7 contract: a
+	// failure here is logged but does not fail the pharmacist action.
+	h.emitActionAudit(ctx, req, ack)
 
 	// Per-action side effects after the audit row + session counter are
 	// safely persisted, so a downstream failure does not lose the audit.
@@ -137,6 +165,39 @@ func (h *Handler) Execute(ctx context.Context, req ActionRequest) (ActionAcknowl
 	}
 
 	return ack, nil
+}
+
+// emitActionAudit fans the action out to the audit emitter. Best-effort
+// per Task 7 contract: a non-nil error is logged but never propagated
+// (the canonical row is already in pharmacist_actions).
+func (h *Handler) emitActionAudit(ctx context.Context, req ActionRequest, ack ActionAcknowledgment) {
+	if h.auditEmitter == nil {
+		return
+	}
+	payload := map[string]any{
+		"action":     string(req.Action),
+		"subject_id": req.SubjectID,
+		"reasoning":  req.Reasoning,
+	}
+	if req.Action == ActionOverride {
+		payload["override_reason_code"] = req.OverrideReasonCode
+		payload["override_reason_code_short"] = req.OverrideReasonCodeShort
+	}
+	evt := audit.AuditEvent{
+		TraceID:      ack.AuditTraceID,
+		EventType:    audit.EventPharmacistAction,
+		Severity:     1,
+		PharmacistID: req.PharmacistID,
+		ResidentID:   req.ResidentID,
+		SessionID:    req.SessionID,
+		Subject:      string(req.Action),
+		Payload:      payload,
+		OccurredAt:   ack.AcceptedAt,
+	}
+	if err := h.auditEmitter.Emit(ctx, evt); err != nil {
+		log.Printf("s2-aggregator: audit emission failed for action=%s trace_id=%s: %v (local row already persisted)",
+			req.Action, ack.AuditTraceID, err)
+	}
 }
 
 // InMemoryActionStore is a test-facing ActionStore that retains the
