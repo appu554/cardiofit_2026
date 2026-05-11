@@ -1,6 +1,22 @@
-# RMMR Workflow — Specification
+# ⚠️ SUPERSEDED — DO NOT USE
 
-> **Status:** Pre-pilot design specification. Authored before any RMMR workflow implementation. Owned by clinical informatics + regulatory advisor; consumed by S2/S3 spec interplay and the eventual RMMR implementation plan.
+> **This document is superseded and was authored in error.** It was written by a parallel agent (claude-opus-4-7, session 2026-05-11) that did not read the canonical architecture stack (v3.0 Product Proposal, Ethical Architecture Implementation Guidelines, Pharmacist Self-Visibility Implementation Guidelines, Recommendation Craft Engine Implementation Guidelines, S2 v1.0 + Adaptive Cognition Addendum, KB-29 Templates, Decision Packet Rendering Guidelines, Style Guide, Substrate Query Feasibility Analysis).
+>
+> **Why this document is wrong:** It authors a 6-stage workflow architecture for RMMR without inheriting the substrate-primitive-inheritance discipline from S2 Adaptive Cognition Addendum Part 4. The canonical discipline is that shared primitives (trajectories, recommendation lifecycle, restraint pairing, drill-through, audit, goals-of-care, pharmacist actions) are specified once across the platform and inherited by each surface that consumes them. This document re-specifies these primitives in the RMMR context rather than inheriting. It also speculates regulatory citations (MBS items, AHPRA sections, ACOP standards) without confirmed sources — the canonical RMMR work must be co-authored with a regulatory advisor, not Claude-speculated.
+>
+> **A canonical RMMR Workflow Implementation Guidelines v1.0 is the proper authoring path.** It will inherit primitive-inheritance discipline from S2 Addendum Part 4, cite verified regulatory anchors confirmed by a regulatory advisor, and specialise for the formal-authoring workflow audience (drafting, evidence assembly, structured deliverable). This document does none of that with rigor.
+>
+> **Do not implement against this document. Do not cite this document. Do not extend this document.**
+>
+> ---
+>
+> _Original content preserved below for audit trail only._
+
+---
+
+# RMMR Workflow — Specification (SUPERSEDED)
+
+> **Status:** SUPERSEDED. Authored without reading canonical stack; regulatory citations speculative. Do not use.
 
 **Scope:** Residential Medication Management Review (RMMR) workflow support on the CardioFit platform — scheduling, data inputs, session conduct, report generation, GP communication, follow-up cycle, and AHPRA / ACOP / MBS-compliant audit trails.
 

@@ -1,6 +1,22 @@
-# S3 GP Communication Hub — Specification
+# ⚠️ SUPERSEDED — DO NOT USE
 
-> **Status:** Pre-pilot design specification. Authored before any S3 implementation work. Owned by clinical informatics + GP advisory group (when constituted); consumed by S2 (launch point) and the eventual S3 implementation plan.
+> **This document is superseded and was authored in error.** It was written by a parallel agent (claude-opus-4-7, session 2026-05-11) that did not read the canonical architecture stack (v3.0 Product Proposal, Ethical Architecture Implementation Guidelines, Pharmacist Self-Visibility Implementation Guidelines, Recommendation Craft Engine Implementation Guidelines, S2 v1.0 + Adaptive Cognition Addendum, KB-29 Templates, Decision Packet Rendering Guidelines, Style Guide, Substrate Query Feasibility Analysis).
+>
+> **Why this document is wrong:** It authors a 4-view "envelope" architecture for the GP communication surface without inheriting the substrate-primitive-inheritance discipline committed in S2 Adaptive Cognition Addendum Part 4. The canonical discipline is that the shared primitives (recommendation lifecycle, restraint pairing, drill-through, audit, goals-of-care, pharmacist actions) are specified once across the platform and inherited by each surface that consumes them. Each surface specialises for its audience but does not redefine the primitives. This document specialises without inheriting — it invents framing-tone fields, transport candidates, response capture vocabulary, and ethics monitoring hooks rather than referencing how the canonical stack already specifies those primitives.
+>
+> **A canonical S3 GP Communication Hub Implementation Guidelines v1.0 is the proper authoring path.** It will inherit the substrate-primitive-inheritance discipline from S2 Addendum Part 4 and specialise for the GP audience (asynchronous decision capture, per-GP framing learning, mobile-primary form factor) — not reinvent the primitives. This document does not.
+>
+> **Do not implement against this document. Do not cite this document. Do not extend this document.**
+>
+> ---
+>
+> _Original content preserved below for audit trail only._
+
+---
+
+# S3 GP Communication Hub — Specification (SUPERSEDED)
+
+> **Status:** SUPERSEDED. Authored without reading canonical stack. Do not use.
 
 **Audience:** The general practitioner (GP) who prescribed the medication and is responsible for accepting / declining / deferring the pharmacist's recommendation. **Secondary:** the pilot pharmacist sending the message (sees the other side of the same envelope). **Tertiary:** the audit trail (every send/receive/response recorded for EvidenceTrace + AHPRA defensibility).
 
