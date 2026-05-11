@@ -1,6 +1,28 @@
-# S2 Resident Workspace — Specification
+# ⚠️ SUPERSEDED — DO NOT USE
 
-> **Status:** Pre-pilot design specification. Authored before any S2 implementation work. Owned by clinical informatics; consumed by kb-33 worklist (Step 5) and the eventual S2 implementation plan.
+> **This document is superseded and was authored in error.** It was written by a parallel agent (claude-opus-4-7, session 2026-05-11) that did not read the canonical S2 architectural stack before authoring. It conflicts architecturally with the canonical specifications below — it commits to an "eight fixed panels" model while the canonical S2 commits to a single adaptive cognition workspace with five cognitive depth layers sharing inherited primitives.
+>
+> **Canonical S2 specification:**
+> - `docs/superpowers/plans/S2_Resident_Workspace_Implementation_Guidelines_v1.md` (1475 lines) — authoritative v1.0
+> - `docs/superpowers/plans/S2_Adaptive_Cognition_Architectural_Commitment_Addendum.md` (477 lines) — architectural commitment to adaptive cognition framework
+>
+> **Why this document is preserved rather than deleted:** the audit trail of what went wrong is itself useful for future contributors (and future agents) so the failure mode — authoring without reading the existing architecture stack — is visible. Do not implement against this document. Do not cite this document. Do not extend this document. See the canonical files above.
+>
+> **Specific architectural conflicts with the canonical stack:**
+> 1. This document treats S2 as eight fixed panels (R/A/C/T/V/F/O/E); canonical commits to five cognitive depth layers (Baseline → Escalated → Complex Cognition → Situation Board → Deep Investigation) sharing primitives.
+> 2. This document authors cognitive/clinical content (panel field decisions, FIR vs PRN ordering, scoring rationale rendering); canonical Addendum Part 6 explicitly defers Layer 2–5 cognitive content to senior consultant pharmacist authoring + pilot evidence. The discipline is "Claude provides structural framework; clinical content is human-authored."
+> 3. This document uses vocabulary that doesn't match canonical: missing CAPE context band, four entry paths (worklist/search/notification/cross-reference), eleven pharmacist actions, advisory-only restraint Phase 1, PDP visibility class, trajectory primary / snapshot secondary discipline, verification-not-belief drill-through, cognitive escalation as architectural signal with §8 bounds.
+> 4. This document cites only the substrate types shipped in Step 4; canonical builds on v3.0 Product Proposal, Decision Packet Rendering Guidelines, CAPE v1.1 + addendum, Recommendation Craft Engine Guidelines, KB-29 Templates, Ethical Architecture Guidelines, Pharmacist Self-Visibility Guidelines, Style Guide, Substrate Query Feasibility Analysis — a ten-document architecture stack this document was blind to.
+>
+> ---
+>
+> _Original content preserved below for audit trail only._
+
+---
+
+# S2 Resident Workspace — Specification (SUPERSEDED)
+
+> **Status:** SUPERSEDED. Pre-pilot design specification authored without reading canonical stack. Do not use.
 
 **Audience:** The accredited consultant pharmacist conducting medication review at a residential aged care facility. Surface is *not* for residents, families, GPs, facility operators, or auditors directly — those are S3, S4, S5, and the audit query API respectively.
 
