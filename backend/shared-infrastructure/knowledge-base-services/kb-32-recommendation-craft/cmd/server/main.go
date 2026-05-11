@@ -38,6 +38,7 @@ import (
 	"github.com/cardiofit/kb32/internal/appropriateness"
 	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
+	"github.com/cardiofit/kb32/internal/lifecycle"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
 	kb32pg "github.com/cardiofit/kb32/internal/store/postgres"
@@ -132,15 +133,25 @@ func main() {
 	// in-memory placeholder is retained so the service starts without a
 	// real DB attached. See internal/store/postgres/substrate_client.go for
 	// the kb-20 → ClinicalSnapshot mapping.
+	// EthicsLog substrate is constructed early so the Stage 7 EvidenceTrace
+	// emitter (Phase 2-completion Task 4) can share the same store with the
+	// /v1/explain endpoint's deep-audit reader. Phase 2-completion keeps the
+	// store in-memory; Phase 3+ will swap for a Postgres-backed Store.
+	logStore := ethics_log.NewInMemoryStore()
+
 	var (
 		substrateClient  kb32ctx.SubstrateClient
 		citationRegistry citations.Registry
+		evidenceTracer   lifecycle.EvidenceTraceEmitter
 	)
 	if devMode {
 		substrateClient = &inMemorySubstrateClient{dsn: dsn}
 		// Phase 2a in-memory placeholder retained for dev-mode boots without
 		// a real Postgres attached.
 		citationRegistry = citations.NewInMemoryRegistry()
+		// Dev wiring: EthicsLog-only emitter. Postgres emitter is omitted so
+		// the service can boot without migration 045 applied.
+		evidenceTracer = lifecycle.NewEthicsLogEmitter(ethics_log.NewLogger(logStore))
 	} else {
 		db, err := sql.Open("postgres", dsn)
 		if err != nil {
@@ -151,6 +162,13 @@ func main() {
 		// Shares the same *sql.DB as the substrate client — do NOT open a
 		// second connection pool against the same DSN.
 		citationRegistry = citations.NewPostgresRegistry(db)
+		// Phase 2-completion Task 4: dual-emission Stage 7 audit trail.
+		// EthicsLog + Postgres fan-out; either failure fails the pipeline
+		// (fail-hard), so a missed trace surfaces immediately.
+		evidenceTracer = lifecycle.NewCompositeEmitter(
+			lifecycle.NewEthicsLogEmitter(ethics_log.NewLogger(logStore)),
+			lifecycle.NewPostgresEmitter(db),
+		)
 	}
 	assembler := kb32ctx.NewAssembler(substrateClient)
 
@@ -198,7 +216,8 @@ func main() {
 		}
 	}
 
-	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry)
+	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry).
+		WithEvidenceTracer(evidenceTracer)
 	// TODO(phase-2-completion): wire capacity.Gate via pipeline.WithCapacityGate
 	// once the Postgres-backed CapacitySource (vulnerability + restrictive-practice
 	// consent reads) lands. The Gate API ships in Phase 3 Task 3; production
@@ -242,7 +261,9 @@ func main() {
 	// behind whatever ingress filter sits in front of the service.
 	// -----------------------------------------------------------------------
 	mdStore := decision_metadata.NewInMemoryStore()
-	logStore := ethics_log.NewInMemoryStore()
+	// logStore is constructed earlier alongside the EvidenceTrace emitter so
+	// the Stage 7 ledger and the /v1/explain Layer-4 reader share the same
+	// in-memory substrate during Phase 2-completion.
 	explainHandler := api.NewExplainHandler(
 		mdStore,
 		logStore,

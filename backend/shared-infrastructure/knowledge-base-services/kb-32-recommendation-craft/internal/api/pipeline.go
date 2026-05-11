@@ -28,6 +28,7 @@ import (
 	"github.com/cardiofit/kb32/internal/formatter"
 	"github.com/cardiofit/kb32/internal/framing"
 	"github.com/cardiofit/kb32/internal/generator"
+	"github.com/cardiofit/kb32/internal/lifecycle"
 	"github.com/cardiofit/kb32/internal/ordering"
 	"github.com/cardiofit/kb32/internal/reasoning"
 	"github.com/cardiofit/kb32/internal/urgency"
@@ -120,6 +121,14 @@ type Pipeline struct {
 	// existing tests and dev/test pipelines are unaffected. Production wiring
 	// of the Postgres-backed CapacitySource is deferred to Phase 2-completion.
 	capacityGate *capacity.Gate
+
+	// evidenceTracer, when non-nil, receives a Stage 7 DraftedTransitionEntry
+	// at the success-only return of Run (after Stages 5b citation pinning and
+	// 6 formatter validation). When nil, Stage 7 is a no-op so existing tests
+	// and dev pipelines that have not wired an emitter remain green. Phase
+	// 2-completion Task 4 makes this the production audit-trail commitment;
+	// emission errors fail the pipeline run (fail-hard).
+	evidenceTracer lifecycle.EvidenceTraceEmitter
 }
 
 // WithCapacityGate attaches a capacity.Gate to the Pipeline and returns the
@@ -128,6 +137,17 @@ type Pipeline struct {
 // before the production CapacitySource is wired.
 func (p *Pipeline) WithCapacityGate(g *capacity.Gate) *Pipeline {
 	p.capacityGate = g
+	return p
+}
+
+// WithEvidenceTracer attaches a Stage 7 EvidenceTraceEmitter to the Pipeline
+// and returns the receiver to support fluent construction. Passing nil is
+// permitted and disables Stage 7 emission — useful in tests that do not
+// require an audit-trail double-write. Production callers must wire a
+// non-nil emitter (typically a CompositeEmitter over EthicsLog + Postgres)
+// to honour the Phase 2-completion Task 4 audit-defensibility commitment.
+func (p *Pipeline) WithEvidenceTracer(t lifecycle.EvidenceTraceEmitter) *Pipeline {
+	p.evidenceTracer = t
 	return p
 }
 
@@ -286,6 +306,31 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 	layerOut := buildLayerOutput(pkt, snap)
 	if err := formatter.Validate(layerOut); err != nil {
 		return nil, fmt.Errorf("pipeline stage6 (formatter): %w", err)
+	}
+
+	// Stage 7: evidence-trace emission — the audit-defensibility ledger.
+	//
+	// Emit only on the success-only return: hold paths (capacity at line ~223,
+	// appropriateness at line ~244) return early and MUST NOT produce a trace
+	// because the recommendation never transitioned to drafted.
+	//
+	// Fail-hard semantics: any emitter error fails the pipeline run rather
+	// than silently dropping the trace. A regulator-grade audit trail with
+	// best-effort writes is not an audit trail.
+	if p.evidenceTracer != nil {
+		entry := lifecycle.DraftedTransitionEntry{
+			RecommendationID: pkt.RecommendationID,
+			AuthorID:         authorID,
+			RuleID:           pkt.AppliedRule.RuleID,
+			ContentHash:      hash,
+			Assessment:       assessment,
+			Citations:        pinnedCitations,
+			Urgency:          urgencyTag,
+			FiredAt:          time.Now().UTC(),
+		}
+		if err := p.evidenceTracer.EmitDraftedTransition(ctx, entry); err != nil {
+			return nil, fmt.Errorf("pipeline stage7 (evidence trace): %w", err)
+		}
 	}
 
 	return &PipelineResult{
