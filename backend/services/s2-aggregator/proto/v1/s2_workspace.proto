@@ -1,0 +1,378 @@
+// S2 Resident Workspace gRPC service contract (IDL only — wire-contract).
+//
+// Source of truth for this contract:
+//   - docs/superpowers/plans/S2_Resident_Workspace_Implementation_Guidelines_v1.md
+//     Part 16 (lines ~1214–1246) — the 15-RPC S2WorkspaceService surface.
+//   - docs/superpowers/plans/S2_Adaptive_Cognition_Architectural_Commitment_Addendum.md
+//     Part 8 (lines ~368–431) — engineering implications including the
+//     S2ViewBuilder interface and the Layer 2–5 deferral discipline.
+//
+// IMPORTANT — wire-contract only:
+//
+// No buf configuration exists in this repo. This file is the canonical
+// IDL but no Go bindings are generated and no gRPC server is implemented
+// at Task 8. The Task 8 surface is HTTP (Gin) only; see internal/api/http.go.
+// TODO(codegen) markers throughout this file flag the messages and RPCs
+// that will need buf + protoc-gen-go-grpc when gRPC support lands.
+//
+// This pattern mirrors kb-33-triage-engine/proto/observation_layer.proto
+// from Step 4 Task E.
+//
+// Message <-> Go-type correspondence (where Go types already exist):
+//
+//   WorkspaceRequest       <-> aggregation.WorkspaceRequest          (Task 2)
+//   S2View                 <-> aggregation.Layer1View                (Task 1)
+//   SubstrateObservation   <-> drill_through.SubstrateObservation    (Task 3)
+//   TrajectoryHistory      <-> drill_through.TrajectoryHistory       (Task 3)
+//   ActionRequest          <-> actions.ActionRequest                 (Task 6)
+//   Acknowledgment         <-> actions.ActionAcknowledgment          (Task 6)
+//   SessionContext         <-> actions.SessionContext                (Task 6)
+//   AuditTrail / AuditEvent<-> audit.AuditEvent                      (Task 7)
+//   EscalationEvent        <-> aggregation.EscalationEvent           (Task 1)
+//
+// Messages for Layer 3+ (S2ComplexView) and several action-specific
+// envelope shapes carry only minimal fields and a forward-pointer
+// TODO(layer 2-5 expansion per S2 Adaptive Cognition Addendum Part 6).
+
+syntax = "proto3";
+
+package cardiofit.s2.v1;
+
+option go_package = "github.com/cardiofit/s2-aggregator/proto/v1;s2v1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// Service surface — 15 RPCs per v1.0 Part 16
+// =============================================================================
+//
+// TODO(codegen): wire buf + protoc-gen-go-grpc to generate the server
+// stubs. Until then this file is wire-contract only; production traffic
+// flows over the HTTP surface in internal/api/http.go which mirrors these
+// RPCs at the route level.
+
+service S2WorkspaceService {
+  // ---------------------------------------------------------------------------
+  // Rendering (v1.0 Part 16 lines 1219–1220)
+  // ---------------------------------------------------------------------------
+  rpc GetResidentWorkspace(WorkspaceRequest) returns (S2View);
+  rpc RefreshResidentWorkspace(RefreshRequest) returns (S2View);
+
+  // ---------------------------------------------------------------------------
+  // Drill-through (v1.0 Part 16 lines 1222–1224)
+  // ---------------------------------------------------------------------------
+  rpc GetSubstrateObservation(ObservationRequest) returns (SubstrateObservation);
+  rpc GetTrajectoryHistory(TrajectoryRequest) returns (TrajectoryHistory);
+
+  // ---------------------------------------------------------------------------
+  // The 11 pharmacist actions (v1.0 Part 16 lines 1226–1236)
+  // ---------------------------------------------------------------------------
+  rpc OpenRecommendation(ActionRequest) returns (Acknowledgment);
+  rpc ModifyRecommendation(ModificationRequest) returns (Acknowledgment);
+  rpc DeferRecommendation(DeferRequest) returns (Acknowledgment);
+  rpc OverrideRecommendation(OverrideRequest) returns (Acknowledgment);
+  rpc MarkResidentReviewed(ReviewRequest) returns (Acknowledgment);
+  rpc FlagForFollowUp(FollowUpRequest) returns (Acknowledgment);
+  rpc AddPharmacistNote(NoteRequest) returns (Acknowledgment);
+  rpc OpenComplexWorkspace(ActivationRequest) returns (S2ComplexView);
+  rpc AcknowledgeRestraintSignal(RestraintAckRequest) returns (Acknowledgment);
+  rpc InvokeSafetyCriticalBypass(BypassRequest) returns (Acknowledgment);
+
+  // ---------------------------------------------------------------------------
+  // Audit read (v1.0 Part 16 line 1239)
+  // ---------------------------------------------------------------------------
+  rpc GetS2AuditTrail(AuditRequest) returns (AuditTrail);
+
+  // ---------------------------------------------------------------------------
+  // Session lifecycle (v1.0 Part 16 lines 1242–1243)
+  // ---------------------------------------------------------------------------
+  rpc StartSession(SessionStartRequest) returns (SessionContext);
+  rpc EndSession(SessionEndRequest) returns (SessionSummary);
+}
+
+// =============================================================================
+// Common scalar shapes
+// =============================================================================
+
+// Polymorphic entry-path context carried with every WorkspaceRequest.
+// One-of payload because the four entry paths carry distinct context.
+message EntryPathMetadata {
+  google.protobuf.Timestamp triggered_at = 1;
+  string pharmacist_id = 2;
+  string resident_id   = 3;
+  // One of "worklist", "search", "notification", "cross_reference"
+  // — matches aggregation.EntryPath constants.
+  string path = 4;
+  oneof context {
+    WorklistContext         worklist        = 5;
+    SearchContext           search          = 6;
+    NotificationContext     notification    = 7;
+    CrossReferenceContext   cross_reference = 8;
+  }
+}
+
+message WorklistContext {
+  repeated string primary_signals = 1;
+  double cape_score = 2;
+  google.protobuf.Timestamp triaged_at = 3;
+}
+
+message SearchContext {
+  string query = 1;
+  google.protobuf.Timestamp matched_at = 2;
+}
+
+message NotificationContext {
+  string notification_id = 1;
+  string reason_text     = 2;
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message CrossReferenceContext {
+  string origin_resident_id = 1;
+  string reason_code        = 2;
+}
+
+// SubstrateRef is the verification-not-belief anchor per v1.0 Part 10.
+message SubstrateRef {
+  string source      = 1;
+  string id          = 2;
+  string description = 3;
+}
+
+// =============================================================================
+// Rendering request/response messages
+// =============================================================================
+
+message WorkspaceRequest {
+  string resident_id   = 1;
+  string pharmacist_id = 2;
+  string session_id    = 3;
+  string entry_path    = 4;  // matches aggregation.EntryPath
+  google.protobuf.Timestamp as_of = 5;
+  EntryPathMetadata entry_metadata = 6;
+}
+
+message RefreshRequest {
+  string resident_id   = 1;
+  string pharmacist_id = 2;
+  string session_id    = 3;
+  google.protobuf.Timestamp as_of = 4;
+}
+
+// S2View is the rendered Layer 1 workspace.
+//
+// TODO(layer 2-5 expansion per S2 Adaptive Cognition Addendum Part 6):
+// Layer-2..5 fields are intentionally absent because the rendering
+// content for those layers is deferred to senior consultant pharmacist
+// authoring + pilot evidence. When Layer 2+ content is authored, extend
+// this message with additive fields (preserve wire compatibility) rather
+// than introducing parallel View types.
+message S2View {
+  string resident_id = 1;
+  int32  layer       = 2;  // 1 in Phase 1; 2-5 reserved
+  // Per v1.0 Parts 4–13 the populated content fields are added by the
+  // S2ViewBuilder implementation. Phase 1 ships layer 1 only.
+  // TODO(codegen + content): expand once Tasks 3–7 Go types stabilize
+  // their JSON wire-shape.
+  bytes layer1_payload_json = 3;
+}
+
+// =============================================================================
+// Drill-through request/response messages
+// =============================================================================
+
+message ObservationRequest {
+  string resident_id    = 1;
+  string substrate_type = 2;  // "observation" | "recommendation" | "restraint" | ...
+  string substrate_id   = 3;
+  // backTrail: ordered list of substrate refs that led to this drill-through
+  repeated SubstrateRef back_trail = 4;
+  string pharmacist_id = 5;
+  string session_id    = 6;
+}
+
+message SubstrateObservation {
+  SubstrateRef ref = 1;
+  // Raw observation row. Carried as JSON-encoded bytes so the wire-shape
+  // does not bind us to a particular kb-20 schema version.
+  bytes observation_json = 2;
+  string substrate_confidence = 3;  // "high" | "moderate" | "low"
+  repeated string clinical_context = 4;
+  repeated SubstrateRef claim_back_trail = 5;
+}
+
+message TrajectoryRequest {
+  string resident_id  = 1;
+  string parameter    = 2;
+  string pharmacist_id = 3;
+  string session_id   = 4;
+}
+
+message TrajectoryHistory {
+  string resident_id = 1;
+  string parameter   = 2;
+  // JSON-encoded observation series — chronological oldest-first.
+  bytes observations_json = 3;
+}
+
+// =============================================================================
+// Action request envelopes
+// =============================================================================
+
+// ActionRequest is the canonical envelope used by the open action.
+// Other actions carry small message-specific extensions and re-embed
+// this common shape via the `base` field for consistency.
+message ActionRequest {
+  string action        = 1;  // matches actions.Action
+  string pharmacist_id = 2;
+  string resident_id   = 3;
+  string session_id    = 4;
+  string subject_id    = 5;
+  string reasoning     = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message ModificationRequest {
+  ActionRequest base = 1;
+  // Modification carries reasoning in base.reasoning (MANDATORY per
+  // v1.0 Part 12.3).
+  // TODO(layer 2-5 expansion per S2 Adaptive Cognition Addendum Part 6):
+  // expand with structured modification fields (dose/freq/route) once
+  // the v1.0 Part 12.2.modify table is authored.
+}
+
+message DeferRequest {
+  ActionRequest base = 1;
+  // Reasoning is OPTIONAL.
+}
+
+message OverrideRequest {
+  ActionRequest base = 1;
+  string override_reason_code       = 2;  // snake_case
+  string override_reason_code_short = 3;  // 3-letter Guidelines Part 5 code
+  string appropriateness_flag       = 4;
+  // Reasoning is MANDATORY in base.reasoning.
+}
+
+message ReviewRequest {
+  ActionRequest base = 1;
+}
+
+message FollowUpRequest {
+  ActionRequest base = 1;
+}
+
+message NoteRequest {
+  ActionRequest base = 1;
+  // The note IS the reasoning (v1.0 Part 12.3 add-note row). Stored in
+  // note_body; base.reasoning is left empty.
+  string note_body = 2;
+}
+
+message ActivationRequest {
+  ActionRequest base = 1;
+  // TODO(layer 2-5 expansion per S2 Adaptive Cognition Addendum Part 6):
+  // Layer-3 activation may carry the multi-domain concern vector that
+  // triggered the escalation.
+}
+
+message RestraintAckRequest {
+  ActionRequest base = 1;
+  // Reasoning is OPTIONAL on acknowledgement.
+}
+
+message BypassRequest {
+  ActionRequest base = 1;
+  // Reasoning is MANDATORY and the audit row is audit-prioritised.
+}
+
+// Acknowledgment is the response shape for every action RPC.
+// Mirrors actions.ActionAcknowledgment.
+message Acknowledgment {
+  string action_id      = 1;
+  google.protobuf.Timestamp accepted_at = 2;
+  string audit_trace_id = 3;
+}
+
+// S2ComplexView is the Layer 3 escalation rendering response from
+// OpenComplexWorkspace.
+//
+// TODO(layer 2-5 expansion per S2 Adaptive Cognition Addendum Part 6):
+// Layer-3 content (multi-domain concern vectors, "what experts typically
+// check" memory aids) is deferred to senior consultant pharmacist
+// authoring. Phase 1 RPCs return only the action acknowledgment and the
+// "layer 3 not yet implemented" sentinel.
+message S2ComplexView {
+  Acknowledgment ack = 1;
+  string layer_status = 2;  // e.g. "deferred_addendum_part_6"
+  // Layer 3 payload TBD.
+}
+
+// =============================================================================
+// Audit / session messages
+// =============================================================================
+
+message AuditRequest {
+  string resident_id   = 1;
+  string pharmacist_id = 2;
+  // Time window (inclusive start, exclusive end) — both optional.
+  google.protobuf.Timestamp start = 3;
+  google.protobuf.Timestamp end   = 4;
+}
+
+// AuditTrail mirrors audit.AuditEvent but transports the payload as
+// JSON-encoded bytes to avoid binding to map<string,any> on the wire.
+message AuditTrail {
+  repeated AuditEvent events = 1;
+}
+
+message AuditEvent {
+  string trace_id      = 1;
+  string event_type    = 2;  // "view_render" | "pharmacist_action" | ...
+  int32  severity      = 3;
+  string pharmacist_id = 4;
+  string resident_id   = 5;
+  string session_id    = 6;
+  string subject       = 7;
+  bytes  payload_json  = 8;
+  google.protobuf.Timestamp occurred_at = 9;
+}
+
+message SessionStartRequest {
+  string pharmacist_id = 1;
+}
+
+message SessionContext {
+  string session_id     = 1;
+  string pharmacist_id  = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp ended_at   = 4;  // nullable
+  repeated string residents_reviewed   = 5;
+  int32 action_count                   = 6;
+}
+
+message SessionEndRequest {
+  string session_id = 1;
+}
+
+message SessionSummary {
+  SessionContext context = 1;
+  // TODO(codegen + content): add roll-up summary fields once v1.0 Part 12.4
+  // session-summary layout is authored.
+}
+
+// EscalationEvent mirrors aggregation.EscalationEvent. Not directly
+// returned by any RPC (Phase 1 is LOG-ONLY per Addendum Part 5.5); kept
+// here so future per-pharmacist read paths can be added without breaking
+// wire-shape compatibility once authorisation policy permits.
+message EscalationEvent {
+  string pharmacist_id = 1;
+  string resident_id   = 2;
+  string session_id    = 3;
+  int32  from_layer    = 4;
+  int32  to_layer      = 5;
+  string triggered_by  = 6;  // "automatic" | "pharmacist_initiated"
+  google.protobuf.Timestamp timestamp = 7;
+  string audit_trace_id = 8;
+}
