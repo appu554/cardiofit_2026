@@ -65,6 +65,46 @@ type SubstrateClient interface {
 	// the SubstrateClient MUST NOT filter signals based on transition
 	// criteria — that is informational-only in Phase 1.
 	ActiveRestraintSignals(ctx context.Context, residentID uuid.UUID) ([]substrate_types.RestraintSignal, error)
+
+	// FailedInterventionHistory returns the resident's failed-intervention
+	// records since `since`. Per S2 v1.0 Part 8.4 default the panel
+	// supplies a 12-month `since` for the standard view.
+	//
+	// KNOWN GAP (Step 4 Task B): the canonical Store writes
+	// ResidentID=uuid.Nil today, so the production adapter (Task 8)
+	// returns an empty slice until kb-32 ships the RecommendationID→
+	// ResidentID JOIN-resolver. The fake in this package returns
+	// seeded rows so tests can exercise the populated panel.
+	FailedInterventionHistory(ctx context.Context, residentID uuid.UUID, since time.Time) ([]substrate_types.FailedInterventionRecord, error)
+
+	// FailedInterventionRetrievalAvailable reports whether FIR retrieval
+	// by resident-id is wired in this environment. The s2 panel uses
+	// the result to render the gap-badge per Step 4 Task B's documented
+	// limitation. Phase 1 production adapter returns false; the in-mem
+	// fake returns true.
+	FailedInterventionRetrievalAvailable() bool
+
+	// CurrentGoalsOfCare returns the most-recent documented GoC state
+	// for the resident, or nil when none is on record.
+	CurrentGoalsOfCare(ctx context.Context, residentID uuid.UUID) (*substrate_types.GoalsOfCareEntry, error)
+
+	// GoalsOfCareHistory returns the resident's GoC entries oldest-first.
+	// Returns an empty slice when none exist; never nil.
+	GoalsOfCareHistory(ctx context.Context, residentID uuid.UUID) ([]substrate_types.GoalsOfCareEntry, error)
+
+	// CurrentCareIntensity returns the most-recent care-intensity entry,
+	// or nil when none is on record.
+	CurrentCareIntensity(ctx context.Context, residentID uuid.UUID) (*substrate_types.CareIntensityEntry, error)
+
+	// CareIntensityHistory returns the resident's care-intensity history
+	// oldest-first. Returns empty slice when none; never nil.
+	CareIntensityHistory(ctx context.Context, residentID uuid.UUID) ([]substrate_types.CareIntensityEntry, error)
+
+	// LastFamilyMeetingDate returns the most-recent family meeting date
+	// for the resident, or nil when none on record. Layer 1 scope per
+	// v1.0 Part 9.3 + Addendum Part 3.2 — full chronology deferred to
+	// Layer 2.
+	LastFamilyMeetingDate(ctx context.Context, residentID uuid.UUID) (*time.Time, error)
 }
 
 // Snapshot is the s2-aggregator's view of kb-20's ClinicalSnapshot. Fields
@@ -93,11 +133,18 @@ type inMemorySubstrateClient struct {
 	administrations []substrate_types.PRNAdministration
 
 	// Task 4 additions: pending-recommendation pipeline substrate.
-	packets         []substrate_types.RecommendationPacket
-	assessments     map[uuid.UUID]substrate_types.AssessmentScores
-	citations       map[uuid.UUID][]substrate_types.Citation
-	overrides       map[uuid.UUID][]substrate_types.OverrideReason
-	restraintByRes  map[uuid.UUID][]substrate_types.RestraintSignal
+	packets        []substrate_types.RecommendationPacket
+	assessments    map[uuid.UUID]substrate_types.AssessmentScores
+	citations      map[uuid.UUID][]substrate_types.Citation
+	overrides      map[uuid.UUID][]substrate_types.OverrideReason
+	restraintByRes map[uuid.UUID][]substrate_types.RestraintSignal
+
+	// Task 5 additions: FIR + GoC + care intensity + family communication.
+	firByRes              map[uuid.UUID][]substrate_types.FailedInterventionRecord
+	firRetrievalAvailable bool
+	gocByRes              map[uuid.UUID][]substrate_types.GoalsOfCareEntry
+	intensityByRes        map[uuid.UUID][]substrate_types.CareIntensityEntry
+	lastFamilyMeeting     map[uuid.UUID]time.Time
 }
 
 // NewInMemorySubstrateClient returns an empty in-memory fake. Use
@@ -105,10 +152,15 @@ type inMemorySubstrateClient struct {
 // WithCitations / WithOverrides / WithRestraintSignals to seed it.
 func NewInMemorySubstrateClient() *inMemorySubstrateClient {
 	return &inMemorySubstrateClient{
-		assessments:    map[uuid.UUID]substrate_types.AssessmentScores{},
-		citations:      map[uuid.UUID][]substrate_types.Citation{},
-		overrides:      map[uuid.UUID][]substrate_types.OverrideReason{},
-		restraintByRes: map[uuid.UUID][]substrate_types.RestraintSignal{},
+		assessments:           map[uuid.UUID]substrate_types.AssessmentScores{},
+		citations:             map[uuid.UUID][]substrate_types.Citation{},
+		overrides:             map[uuid.UUID][]substrate_types.OverrideReason{},
+		restraintByRes:        map[uuid.UUID][]substrate_types.RestraintSignal{},
+		firByRes:              map[uuid.UUID][]substrate_types.FailedInterventionRecord{},
+		firRetrievalAvailable: true, // fake exposes wired retrieval; production adapter overrides to false
+		gocByRes:              map[uuid.UUID][]substrate_types.GoalsOfCareEntry{},
+		intensityByRes:        map[uuid.UUID][]substrate_types.CareIntensityEntry{},
+		lastFamilyMeeting:     map[uuid.UUID]time.Time{},
 	}
 }
 
@@ -308,4 +360,154 @@ func (c *inMemorySubstrateClient) ActiveRestraintSignals(_ context.Context, resi
 	out := make([]substrate_types.RestraintSignal, len(sigs))
 	copy(out, sigs)
 	return out, nil
+}
+
+// WithFailedInterventions seeds the fake with FIR rows for a resident.
+func (c *inMemorySubstrateClient) WithFailedInterventions(residentID uuid.UUID, recs ...substrate_types.FailedInterventionRecord) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.firByRes[residentID] = append(c.firByRes[residentID], recs...)
+	return c
+}
+
+// WithFIRRetrievalAvailable overrides the fake's retrieval-available
+// flag so tests can exercise both the populated panel and the
+// gap-badge degraded state.
+func (c *inMemorySubstrateClient) WithFIRRetrievalAvailable(available bool) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.firRetrievalAvailable = available
+	return c
+}
+
+// WithGoalsOfCare seeds GoC entries for a resident.
+func (c *inMemorySubstrateClient) WithGoalsOfCare(residentID uuid.UUID, entries ...substrate_types.GoalsOfCareEntry) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gocByRes[residentID] = append(c.gocByRes[residentID], entries...)
+	return c
+}
+
+// WithCareIntensity seeds care-intensity entries for a resident.
+func (c *inMemorySubstrateClient) WithCareIntensity(residentID uuid.UUID, entries ...substrate_types.CareIntensityEntry) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.intensityByRes[residentID] = append(c.intensityByRes[residentID], entries...)
+	return c
+}
+
+// WithLastFamilyMeeting seeds a most-recent family meeting date for a
+// resident.
+func (c *inMemorySubstrateClient) WithLastFamilyMeeting(residentID uuid.UUID, when time.Time) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastFamilyMeeting[residentID] = when
+	return c
+}
+
+// FailedInterventionHistory returns FIRs for a resident with
+// AttemptDate ≥ since, sorted most-recent-first. Empty slice (not nil)
+// when none. When retrieval is unavailable the fake STILL returns the
+// seeded rows — the panel surfaces the gap via the separate
+// FailedInterventionRetrievalAvailable() check.
+func (c *inMemorySubstrateClient) FailedInterventionHistory(_ context.Context, residentID uuid.UUID, since time.Time) ([]substrate_types.FailedInterventionRecord, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows := c.firByRes[residentID]
+	out := make([]substrate_types.FailedInterventionRecord, 0, len(rows))
+	for _, r := range rows {
+		if r.AttemptDate.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AttemptDate.After(out[j].AttemptDate) })
+	return out, nil
+}
+
+// FailedInterventionRetrievalAvailable reports whether resident-id
+// retrieval is wired. Fake default: true; production adapter (Task 8)
+// returns false until kb-32 ships the JOIN-resolver.
+func (c *inMemorySubstrateClient) FailedInterventionRetrievalAvailable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.firRetrievalAvailable
+}
+
+// CurrentGoalsOfCare returns the most-recent GoC entry (by
+// EffectiveFrom) for the resident, or nil when none on record.
+func (c *inMemorySubstrateClient) CurrentGoalsOfCare(_ context.Context, residentID uuid.UUID) (*substrate_types.GoalsOfCareEntry, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows := c.gocByRes[residentID]
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	idx := 0
+	for i := 1; i < len(rows); i++ {
+		if rows[i].EffectiveFrom.After(rows[idx].EffectiveFrom) {
+			idx = i
+		}
+	}
+	cp := rows[idx]
+	return &cp, nil
+}
+
+// GoalsOfCareHistory returns all GoC entries oldest-first.
+func (c *inMemorySubstrateClient) GoalsOfCareHistory(_ context.Context, residentID uuid.UUID) ([]substrate_types.GoalsOfCareEntry, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows := c.gocByRes[residentID]
+	out := make([]substrate_types.GoalsOfCareEntry, len(rows))
+	copy(out, rows)
+	sort.Slice(out, func(i, j int) bool { return out[i].EffectiveFrom.Before(out[j].EffectiveFrom) })
+	return out, nil
+}
+
+// CurrentCareIntensity returns the most-recent care-intensity entry
+// (by EffectiveDate), or nil when none on record.
+func (c *inMemorySubstrateClient) CurrentCareIntensity(_ context.Context, residentID uuid.UUID) (*substrate_types.CareIntensityEntry, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows := c.intensityByRes[residentID]
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	idx := 0
+	for i := 1; i < len(rows); i++ {
+		if rows[i].EffectiveDate.After(rows[idx].EffectiveDate) {
+			idx = i
+		}
+	}
+	cp := rows[idx]
+	return &cp, nil
+}
+
+// CareIntensityHistory returns all care-intensity entries oldest-first.
+func (c *inMemorySubstrateClient) CareIntensityHistory(_ context.Context, residentID uuid.UUID) ([]substrate_types.CareIntensityEntry, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows := c.intensityByRes[residentID]
+	out := make([]substrate_types.CareIntensityEntry, len(rows))
+	copy(out, rows)
+	sort.Slice(out, func(i, j int) bool { return out[i].EffectiveDate.Before(out[j].EffectiveDate) })
+	return out, nil
+}
+
+// LastFamilyMeetingDate returns the most-recent meeting date, or nil
+// when none on record.
+func (c *inMemorySubstrateClient) LastFamilyMeetingDate(_ context.Context, residentID uuid.UUID) (*time.Time, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	t, ok := c.lastFamilyMeeting[residentID]
+	if !ok {
+		return nil, nil
+	}
+	return &t, nil
 }
