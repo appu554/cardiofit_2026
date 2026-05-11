@@ -118,22 +118,15 @@ def _bbox_to_tuple(bbox) -> Optional[tuple[float, float, float, float]]:
 
 
 def _channel_d_model_version(table_source: Optional[str] = None) -> str:
-    """Channel D model version. Differentiates lane paths in audit provenance.
+    """Channel D model version. Differentiates docling-OTSL vs marker-pipe paths.
 
-    Each lane writes a distinct ``model_version`` into the per-channel
-    provenance so KB-0's audit dashboard can filter by extraction source.
-    Without distinct tags, V5 nemotron-derived cells silently mapped to
-    the generic ``table@v1.0`` and were indistinguishable from V4 OTSL
-    output in the merged spans (post-remediation audit on job bfb11d94).
+    Mirrors Channel A's both-saw vs marker-only branching: tables sourced from
+    Granite-Docling OTSL get one tag; Marker-only pipe tables get another.
     """
     if table_source == "marker_pipe":
         return "pipe-table@v1.0"
     if table_source == "granite_otsl":
         return "docling-otsl@v1.0"
-    if table_source == "monkeyocr_vlm":
-        return "monkeyocr-qwen2.5-vl@v1.0"
-    if table_source == "nemotron_parse":
-        return "nvidia/NVIDIA-Nemotron-Parse-v1.1-TC@sidecar"
     return "table@v1.0"
 
 
