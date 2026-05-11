@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -131,15 +132,25 @@ func main() {
 	// in-memory placeholder is retained so the service starts without a
 	// real DB attached. See internal/store/postgres/substrate_client.go for
 	// the kb-20 → ClinicalSnapshot mapping.
-	var substrateClient kb32ctx.SubstrateClient
+	var (
+		substrateClient  kb32ctx.SubstrateClient
+		citationRegistry citations.Registry
+	)
 	if devMode {
 		substrateClient = &inMemorySubstrateClient{dsn: dsn}
+		// Phase 2a in-memory placeholder retained for dev-mode boots without
+		// a real Postgres attached.
+		citationRegistry = citations.NewInMemoryRegistry()
 	} else {
 		db, err := sql.Open("postgres", dsn)
 		if err != nil {
 			log.Fatalf("kb-32: sql.Open(postgres) failed: %v", err)
 		}
 		substrateClient = kb32pg.NewPostgresSubstrateClient(db)
+		// Phase 2-completion Task 3: PostgresRegistry over migration 043.
+		// Shares the same *sql.DB as the substrate client — do NOT open a
+		// second connection pool against the same DSN.
+		citationRegistry = citations.NewPostgresRegistry(db)
 	}
 	assembler := kb32ctx.NewAssembler(substrateClient)
 
@@ -153,11 +164,12 @@ func main() {
 	// produced by Stages 1–3 — see internal/appropriateness/substrate_scorer.go.
 	appSrc := appropriateness.NewSubstrateBackedScorer()
 
-	// Citation registry — Phase 2a placeholder: InMemoryRegistry with two seed
-	// source versions covering the PostFall and primary drug-safety rule sets.
-	// Phase 2-completion will swap this for citations.NewPostgresRegistry(db)
-	// backed by migration 043.
-	citationRegistry := citations.NewInMemoryRegistry()
+	// Seed the citation registry with the canonical source identifiers used
+	// by Phase 2 rule packs. Insertion goes through the Registry interface so
+	// the same code path works for InMemoryRegistry (dev) and PostgresRegistry
+	// (prod). On Postgres, repeated boots are idempotent: ErrVersionExists is
+	// a logged warning, NOT a fatal — production startup must not fail because
+	// migration 043 already contains the seeded rows from a prior boot.
 	seedCtx := context.Background()
 	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, sv := range []citations.SourceVersion{
@@ -177,6 +189,11 @@ func main() {
 		},
 	} {
 		if err := citationRegistry.Register(seedCtx, sv); err != nil {
+			if errors.Is(err, citations.ErrVersionExists) {
+				log.Printf("kb-32: citation seed already present (idempotent): source=%s version=%s",
+					sv.SourceID, sv.Version)
+				continue
+			}
 			log.Printf("kb-32: citation registry seed warning: %v", err)
 		}
 	}
