@@ -19,8 +19,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cardiofit/shared/v2_substrate/ethics/consent_extension"
+
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/appropriateness"
+	"github.com/cardiofit/kb32/internal/capacity"
 	"github.com/cardiofit/kb32/internal/citations"
 	"github.com/cardiofit/kb32/internal/formatter"
 	"github.com/cardiofit/kb32/internal/framing"
@@ -111,6 +114,21 @@ type Pipeline struct {
 	appSrc     AppropriatenessSource
 	registry   citations.Registry // nil = dev/test mode, pinning skipped gracefully
 	candidates []string           // candidate rule IDs passed to ChainBuilder
+
+	// capacityGate, when non-nil, runs Stage 3.5 between generator (Stage 3)
+	// and appropriateness gate (Stage 4). When nil, Stage 3.5 is a no-op so
+	// existing tests and dev/test pipelines are unaffected. Production wiring
+	// of the Postgres-backed CapacitySource is deferred to Phase 2-completion.
+	capacityGate *capacity.Gate
+}
+
+// WithCapacityGate attaches a capacity.Gate to the Pipeline and returns the
+// receiver to support fluent construction. Passing nil is permitted and
+// disables Stage 3.5 — useful in tests and during early Phase 2 deployments
+// before the production CapacitySource is wired.
+func (p *Pipeline) WithCapacityGate(g *capacity.Gate) *Pipeline {
+	p.capacityGate = g
+	return p
 }
 
 // NewPipeline constructs a Pipeline with the supplied collaborators.
@@ -192,6 +210,24 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 	// Apply urgency tagger to the snapshot (used in E2E assertions).
 	urgencyTag := urgency.Tag(snap)
 
+	// Stage 3.5: capacity + restrictive-practice consent gate
+	// (Ethical Architecture Guidelines §6.4–6.6).
+	//
+	// Runs only when a capacity.Gate has been wired via WithCapacityGate.
+	// On hold the pipeline returns a PipelineResult with a non-empty
+	// HoldReason — matching the Stage 4 hold pattern — rather than an error,
+	// so the HTTP handler maps the outcome to State="detected".
+	if p.capacityGate != nil {
+		practiceType := classifyRestrictivePractice(pkt)
+		if err := p.capacityGate.Evaluate(ctx, residentID, practiceType); err != nil {
+			return &PipelineResult{
+				Packet:     pkt,
+				UrgencyTag: urgencyTag,
+				HoldReason: fmt.Sprintf("capacity/consent hold: %v", err),
+			}, nil
+		}
+	}
+
 	// Stage 4: appropriateness gate — score and check.
 	var topRule reasoning.ApplicableRule
 	if len(orderedRules) > 0 {
@@ -260,6 +296,43 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 		Assessment:  assessment,
 		Citations:   pinnedCitations,
 	}, nil
+}
+
+// classifyRestrictivePractice maps a generated Packet to the
+// consent_extension.PracticeType it triggers, or the empty PracticeType("")
+// when the packet is not a restrictive practice.
+//
+// Mapping (spec § Phase 3 Task 3) — restrictive packet Type → PracticeType:
+//
+//	"PSYCHOTROPIC"            → consent_extension.PracticeChemicalRestraint
+//	"PHYSICAL_RESTRAINT"      → consent_extension.PracticePhysicalRestraint
+//	"ENVIRONMENTAL_RESTRAINT" → consent_extension.PracticeEnvironmentalRestraint
+//	"SECLUSION"               → consent_extension.PracticeSeclusion
+//
+// As of Phase 3 Task 3 the generator only emits the four canonical types
+// {STOP, MONITOR, DOSE_CHANGE, ADD} (see internal/generator.validPacketTypes),
+// so this function returns "" for every packet currently produced. The
+// classifier nonetheless exists so that when future generator extensions add
+// restrictive-practice packet Types, the gate wiring is already in place.
+//
+// Per the Phase 3 Task 3 spec, no new packet Types are invented here — the
+// classifier accepts only future-defined Type strings.
+func classifyRestrictivePractice(pkt *generator.Packet) consent_extension.PracticeType {
+	if pkt == nil {
+		return ""
+	}
+	switch pkt.Type {
+	case "PSYCHOTROPIC":
+		return consent_extension.PracticeChemicalRestraint
+	case "PHYSICAL_RESTRAINT":
+		return consent_extension.PracticePhysicalRestraint
+	case "ENVIRONMENTAL_RESTRAINT":
+		return consent_extension.PracticeEnvironmentalRestraint
+	case "SECLUSION":
+		return consent_extension.PracticeSeclusion
+	default:
+		return ""
+	}
 }
 
 // orderApplicableRules reorders applicable rules by canonical type priority

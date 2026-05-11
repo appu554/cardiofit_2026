@@ -36,6 +36,8 @@ import (
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
+	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
+	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
 )
 
 // cqlRuntimeURL is the base URL for the kb-cql-runtime HAPI endpoint.
@@ -155,6 +157,11 @@ func main() {
 	}
 
 	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry)
+	// TODO(phase-2-completion): wire capacity.Gate via pipeline.WithCapacityGate
+	// once the Postgres-backed CapacitySource (vulnerability + restrictive-practice
+	// consent reads) lands. The Gate API ships in Phase 3 Task 3; production
+	// source wiring is intentionally deferred. See:
+	// internal/capacity/integration.go (Guidelines §6.4–6.6).
 	handler := api.NewHandler(pipeline)
 
 	// Override store — InMemory in Phase 2b; replace with PostgresStore (VAIDSHALA_DSN)
@@ -169,6 +176,39 @@ func main() {
 	// NOTE: PDP middleware NOT mounted — Phase 2-completion follow-up.
 	// See override_handlers.go package comment for deferral rationale.
 	v1.POST("/override/:recommendation_id", overrideHandler.HandleCapture)
+
+	// -----------------------------------------------------------------------
+	// /v1/explain/:decision_id — Layer 4 deep-audit endpoint
+	//
+	// Returns the full audit trail for a single algorithmic decision
+	// (Ethical Architecture Guidelines Principle 6 / §13.2 reviewability).
+	//
+	// Mounted as a sibling of /v1/craft (NOT nested under it) so the audit
+	// surface remains a top-level, framework-agnostic concern.
+	//
+	// Phase 3 ship state:
+	//   - decision_metadata.Store / ethics_log.Store / citations.Registry are
+	//     in-memory placeholders. Phase 2-completion swaps them for Postgres
+	//     implementations alongside the rest of the substrate persistence.
+	//   - EvidenceTraceLinker is the NoOp implementation. Phase 4 wires the
+	//     real adapter over evidence_trace.TraceForward / TraceBackward once
+	//     a decision-keyed start-node lookup lands.
+	//
+	// TODO(phase-2-completion / phase-4): mount AD-class permission middleware
+	// over this group so only auditor-role callers can read the deep-audit
+	// trail. The current Phase 3 deployment leaves the route unauthenticated
+	// behind whatever ingress filter sits in front of the service.
+	// -----------------------------------------------------------------------
+	mdStore := decision_metadata.NewInMemoryStore()
+	logStore := ethics_log.NewInMemoryStore()
+	explainHandler := api.NewExplainHandler(
+		mdStore,
+		logStore,
+		citationRegistry,
+		api.NoOpEvidenceTraceLinker{},
+	)
+	v1Explain := r.Group("/v1/explain")
+	v1Explain.GET("/:decision_id", explainHandler.HandleExplain)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
