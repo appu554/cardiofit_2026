@@ -112,6 +112,17 @@ func (s *InMemoryStore) createInternal(r OverrideReason, ruleID string) (Overrid
 	if r.CapturedAt.IsZero() {
 		r.CapturedAt = time.Now().UTC()
 	}
+	// Mirror PostgresStore: backfill the missing vocabulary form so reads
+	// always return both ReasonCode and ReasonCodeShort populated.
+	if r.ReasonCodeShort == "" {
+		if short, ok := ToShortCode(r.ReasonCode); ok {
+			r.ReasonCodeShort = short
+		}
+	} else if r.ReasonCode == "" {
+		if snake, ok := ToReasonCode(r.ReasonCodeShort); ok {
+			r.ReasonCode = snake
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records[r.ID] = storedOverride{OverrideReason: r, RuleID: ruleID}
@@ -197,23 +208,36 @@ func (s *PostgresStore) Create(ctx context.Context, r OverrideReason) (OverrideR
 	if r.CapturedAt.IsZero() {
 		r.CapturedAt = time.Now().UTC()
 	}
+	// Defensive normalisation: if the caller skipped Validate() and only set
+	// ReasonCode, derive ReasonCodeShort here so the NOT NULL column is
+	// satisfied. If only ReasonCodeShort is set, derive ReasonCode in turn.
+	// Inconsistent pairs are left as-is and will be rejected by the DB CHECK.
+	if r.ReasonCodeShort == "" {
+		if short, ok := ToShortCode(r.ReasonCode); ok {
+			r.ReasonCodeShort = short
+		}
+	} else if r.ReasonCode == "" {
+		if snake, ok := ToReasonCode(r.ReasonCodeShort); ok {
+			r.ReasonCode = snake
+		}
+	}
 
 	const q = `
 		INSERT INTO recommendation_override_reasons
-			(id, recommendation_id, reason_code, appropriateness_flag,
-			 reasoning, captured_at, captured_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, recommendation_id, reason_code, appropriateness_flag,
-			reasoning, captured_at, captured_by`
+			(id, recommendation_id, reason_code, reason_code_short,
+			 appropriateness_flag, reasoning, captured_at, captured_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, recommendation_id, reason_code, reason_code_short,
+			appropriateness_flag, reasoning, captured_at, captured_by`
 
 	row := s.db.QueryRowContext(ctx, q,
-		r.ID, r.RecommendationID, r.ReasonCode, r.AppropriatenessFlag,
-		r.Reasoning, r.CapturedAt, r.CapturedBy,
+		r.ID, r.RecommendationID, r.ReasonCode, r.ReasonCodeShort,
+		r.AppropriatenessFlag, r.Reasoning, r.CapturedAt, r.CapturedBy,
 	)
 	var out OverrideReason
 	if err := row.Scan(
-		&out.ID, &out.RecommendationID, &out.ReasonCode, &out.AppropriatenessFlag,
-		&out.Reasoning, &out.CapturedAt, &out.CapturedBy,
+		&out.ID, &out.RecommendationID, &out.ReasonCode, &out.ReasonCodeShort,
+		&out.AppropriatenessFlag, &out.Reasoning, &out.CapturedAt, &out.CapturedBy,
 	); err != nil {
 		return OverrideReason{}, fmt.Errorf("overrides: create: %w", err)
 	}
@@ -223,16 +247,16 @@ func (s *PostgresStore) Create(ctx context.Context, r OverrideReason) (OverrideR
 // Get returns the OverrideReason for id, or (zero, ErrNotFound) when absent.
 func (s *PostgresStore) Get(ctx context.Context, id string) (OverrideReason, error) {
 	const q = `
-		SELECT id, recommendation_id, reason_code, appropriateness_flag,
-			reasoning, captured_at, captured_by
+		SELECT id, recommendation_id, reason_code, reason_code_short,
+			appropriateness_flag, reasoning, captured_at, captured_by
 		FROM recommendation_override_reasons
 		WHERE id = $1`
 
 	row := s.db.QueryRowContext(ctx, q, id)
 	var out OverrideReason
 	err := row.Scan(
-		&out.ID, &out.RecommendationID, &out.ReasonCode, &out.AppropriatenessFlag,
-		&out.Reasoning, &out.CapturedAt, &out.CapturedBy,
+		&out.ID, &out.RecommendationID, &out.ReasonCode, &out.ReasonCodeShort,
+		&out.AppropriatenessFlag, &out.Reasoning, &out.CapturedAt, &out.CapturedBy,
 	)
 	if err == sql.ErrNoRows {
 		return OverrideReason{}, ErrNotFound
@@ -248,8 +272,8 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (OverrideReason, err
 // table (columns: id, rule_id) per Plan 0.1.
 func (s *PostgresStore) ListByRule(ctx context.Context, ruleID string) ([]OverrideReason, error) {
 	const q = `
-		SELECT r.id, r.recommendation_id, r.reason_code, r.appropriateness_flag,
-			r.reasoning, r.captured_at, r.captured_by
+		SELECT r.id, r.recommendation_id, r.reason_code, r.reason_code_short,
+			r.appropriateness_flag, r.reasoning, r.captured_at, r.captured_by
 		FROM recommendation_override_reasons r
 		JOIN recommendations rec ON rec.id = r.recommendation_id
 		WHERE rec.rule_id = $1
@@ -265,8 +289,8 @@ func (s *PostgresStore) ListByRule(ctx context.Context, ruleID string) ([]Overri
 	for rows.Next() {
 		var rec OverrideReason
 		if err := rows.Scan(
-			&rec.ID, &rec.RecommendationID, &rec.ReasonCode, &rec.AppropriatenessFlag,
-			&rec.Reasoning, &rec.CapturedAt, &rec.CapturedBy,
+			&rec.ID, &rec.RecommendationID, &rec.ReasonCode, &rec.ReasonCodeShort,
+			&rec.AppropriatenessFlag, &rec.Reasoning, &rec.CapturedAt, &rec.CapturedBy,
 		); err != nil {
 			return nil, fmt.Errorf("overrides: list_by_rule scan: %w", err)
 		}

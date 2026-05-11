@@ -39,6 +39,12 @@ var ErrInvalidFlag = errors.New("overrides: invalid appropriateness flag")
 // field. Free-text rationale is mandatory for every captured override.
 var ErrEmptyReasoning = errors.New("overrides: reasoning must not be empty")
 
+// ErrInconsistentReasonCodes is returned when an OverrideReason carries BOTH
+// a snake_case ReasonCode and a short-code ReasonCodeShort that do not map to
+// each other under the canonical bidirectional mapping. Either field may be
+// supplied alone; if both are supplied, they must be consistent.
+var ErrInconsistentReasonCodes = errors.New("overrides: reason_code and reason_code_short are inconsistent")
+
 // ---------------------------------------------------------------------------
 // Canonical code sets
 // ---------------------------------------------------------------------------
@@ -113,6 +119,65 @@ var validFlags = map[string]struct{}{
 }
 
 // ---------------------------------------------------------------------------
+// Dual-vocabulary mapping — Guidelines Part 5 short codes (Phase 2-completion Task 5)
+// ---------------------------------------------------------------------------
+//
+// Guidelines Part 5 specifies a 3-letter short-code taxonomy used by
+// regulators and dashboard exports alongside the verbose snake_case form.
+// Option C (dual-vocabulary) keeps both: snake_case remains the application
+// primary; short codes are serialised alongside in every API response and
+// persisted in column reason_code_short (migration 046).
+//
+// snakeToShort is the canonical forward mapping. shortToSnake is derived
+// from it at init() so the two cannot drift.
+
+var snakeToShort = map[string]string{
+	// Wright/McCoy foundation (12)
+	"alert_fatigue":         "ALF",
+	"irrelevant_to_patient": "IRP",
+	"patient_preference":    "PPF",
+	"clinical_judgment":     "CJG",
+	"alternative_pursued":   "AAP",
+	"monitoring_in_place":   "MIP",
+	"low_priority":          "LPR",
+	"documentation_concern": "DCN",
+	"uncertain_evidence":    "UNE",
+	"system_error":          "SYS",
+	"workflow_constraint":   "WFC",
+	"duplicative_alert":     "DPA",
+	// ACOP extension (8)
+	"goals_of_care_aligned":    "GCA",
+	"deprescribing_underway":   "DUW",
+	"frailty_consideration":    "FRC",
+	"family_consensus_pending": "FCP",
+	"sdm_review_required":      "SDR",
+	"trial_period_active":      "TPA",
+	"audit_visit_imminent":     "AVI",
+	"cross_resident_pattern":   "CRP",
+}
+
+// shortToSnake is the reverse of snakeToShort, populated by init() so the
+// two maps cannot diverge.
+var shortToSnake = make(map[string]string, len(snakeToShort))
+
+// ValidShortCodes is the exported ordered slice of all 20 canonical Guidelines
+// Part 5 short codes. Ordering matches ValidReasonCodes index-for-index, so
+// callers can zip the two slices to render dashboard tables.
+var ValidShortCodes = []string{
+	// Wright/McCoy foundation (12)
+	"ALF", "IRP", "PPF", "CJG", "AAP", "MIP",
+	"LPR", "DCN", "UNE", "SYS", "WFC", "DPA",
+	// ACOP extension (8)
+	"GCA", "DUW", "FRC", "FCP", "SDR", "TPA", "AVI", "CRP",
+}
+
+func init() {
+	for snake, short := range snakeToShort {
+		shortToSnake[short] = snake
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
@@ -160,6 +225,43 @@ func IsACOPExtension(s string) bool {
 	return ok
 }
 
+// IsValidShortCode reports whether s is one of the 20 canonical Guidelines
+// Part 5 three-letter short codes. The check is case-sensitive: "alf" does
+// not match "ALF".
+func IsValidShortCode(s string) bool {
+	_, ok := shortToSnake[s]
+	return ok
+}
+
+// ToShortCode maps a snake_case reason code to its Guidelines Part 5 short
+// code. Returns ("", false) when snake is not a recognised canonical code.
+func ToShortCode(snake string) (string, bool) {
+	short, ok := snakeToShort[snake]
+	return short, ok
+}
+
+// ToReasonCode maps a Guidelines Part 5 short code to its snake_case form.
+// Returns ("", false) when short is not a recognised canonical short code.
+func ToReasonCode(short string) (string, bool) {
+	snake, ok := shortToSnake[short]
+	return snake, ok
+}
+
+// NormalizeCode accepts either vocabulary (snake_case OR three-letter short)
+// and returns the canonical pair (snake, short). Useful at API ingress and
+// when reading legacy rows that may have only one form populated.
+//
+// Returns ErrInvalidReasonCode when s matches neither vocabulary.
+func NormalizeCode(s string) (snake, short string, err error) {
+	if short, ok := snakeToShort[s]; ok {
+		return s, short, nil
+	}
+	if snake, ok := shortToSnake[s]; ok {
+		return snake, s, nil
+	}
+	return "", "", ErrInvalidReasonCode
+}
+
 // ---------------------------------------------------------------------------
 // OverrideReason struct
 // ---------------------------------------------------------------------------
@@ -179,9 +281,17 @@ type OverrideReason struct {
 	// overridden. Must not be empty; validated at the persistence layer.
 	RecommendationID string
 
-	// ReasonCode is the structured override reason from the canonical set of
-	// 20 codes (Guidelines §5). Must pass IsValidReasonCode.
+	// ReasonCode is the structured override reason in verbose snake_case form
+	// from the canonical set of 20 codes (Guidelines §5). Must pass
+	// IsValidReasonCode. This is the application-primary form.
 	ReasonCode string
+
+	// ReasonCodeShort is the Guidelines Part 5 three-letter short code
+	// corresponding to ReasonCode (e.g. "ALF" for "alert_fatigue"). When
+	// omitted on input, Validate() derives it from ReasonCode via
+	// ToShortCode. When both are supplied, Validate() enforces consistency
+	// against the canonical bidirectional mapping.
+	ReasonCodeShort string
 
 	// AppropriatenessFlag classifies the override as clinically appropriate,
 	// inappropriate, or mixed. Must pass IsValidFlag.
@@ -201,15 +311,29 @@ type OverrideReason struct {
 
 // Validate checks that the OverrideReason is internally consistent and ready
 // for persistence. Validation order:
-//  1. ReasonCode must be a valid canonical code (ErrInvalidReasonCode).
-//  2. AppropriatenessFlag must be a valid canonical flag (ErrInvalidFlag).
-//  3. Reasoning must not be empty (ErrEmptyReasoning).
+//  1. ReasonCode must be a valid canonical snake_case code (ErrInvalidReasonCode).
+//  2. ReasonCodeShort consistency: if empty, derived from ReasonCode; if
+//     populated, must equal the canonical mapping of ReasonCode
+//     (ErrInconsistentReasonCodes).
+//  3. AppropriatenessFlag must be a valid canonical flag (ErrInvalidFlag).
+//  4. Reasoning must not be empty (ErrEmptyReasoning).
 //
 // Returns the first error encountered; callers should use errors.Is for
 // sentinel matching.
-func (o OverrideReason) Validate() error {
+//
+// Validate has a pointer receiver so it can derive ReasonCodeShort in place
+// when callers leave it empty — this lets API handlers persist a fully
+// populated record without duplicating the mapping at the call site.
+func (o *OverrideReason) Validate() error {
 	if !IsValidReasonCode(o.ReasonCode) {
 		return ErrInvalidReasonCode
+	}
+	canonicalShort, _ := ToShortCode(o.ReasonCode)
+	switch {
+	case o.ReasonCodeShort == "":
+		o.ReasonCodeShort = canonicalShort
+	case o.ReasonCodeShort != canonicalShort:
+		return ErrInconsistentReasonCodes
 	}
 	if !IsValidFlag(o.AppropriatenessFlag) {
 		return ErrInvalidFlag

@@ -233,3 +233,179 @@ func TestIsACOPExtension(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Dual-vocabulary tests (Phase 2-completion Task 5)
+// ---------------------------------------------------------------------------
+
+// canonicalMapping is the single source of truth for the test layer; if the
+// implementation map drifts, these tests fail. Order matches ValidReasonCodes.
+var canonicalMapping = []struct {
+	Snake string
+	Short string
+}{
+	// Wright/McCoy foundation (12)
+	{"alert_fatigue", "ALF"},
+	{"irrelevant_to_patient", "IRP"},
+	{"patient_preference", "PPF"},
+	{"clinical_judgment", "CJG"},
+	{"alternative_pursued", "AAP"},
+	{"monitoring_in_place", "MIP"},
+	{"low_priority", "LPR"},
+	{"documentation_concern", "DCN"},
+	{"uncertain_evidence", "UNE"},
+	{"system_error", "SYS"},
+	{"workflow_constraint", "WFC"},
+	{"duplicative_alert", "DPA"},
+	// ACOP extension (8)
+	{"goals_of_care_aligned", "GCA"},
+	{"deprescribing_underway", "DUW"},
+	{"frailty_consideration", "FRC"},
+	{"family_consensus_pending", "FCP"},
+	{"sdm_review_required", "SDR"},
+	{"trial_period_active", "TPA"},
+	{"audit_visit_imminent", "AVI"},
+	{"cross_resident_pattern", "CRP"},
+}
+
+func TestToShortCode_All20(t *testing.T) {
+	for _, tc := range canonicalMapping {
+		got, ok := ToShortCode(tc.Snake)
+		if !ok {
+			t.Errorf("ToShortCode(%q): expected ok=true, got ok=false", tc.Snake)
+			continue
+		}
+		if got != tc.Short {
+			t.Errorf("ToShortCode(%q): got %q; want %q", tc.Snake, got, tc.Short)
+		}
+	}
+	if _, ok := ToShortCode("garbage"); ok {
+		t.Error("ToShortCode(\"garbage\"): expected ok=false, got ok=true")
+	}
+}
+
+func TestToReasonCode_All20(t *testing.T) {
+	for _, tc := range canonicalMapping {
+		got, ok := ToReasonCode(tc.Short)
+		if !ok {
+			t.Errorf("ToReasonCode(%q): expected ok=true, got ok=false", tc.Short)
+			continue
+		}
+		if got != tc.Snake {
+			t.Errorf("ToReasonCode(%q): got %q; want %q", tc.Short, got, tc.Snake)
+		}
+	}
+	if _, ok := ToReasonCode("ZZZ"); ok {
+		t.Error("ToReasonCode(\"ZZZ\"): expected ok=false, got ok=true")
+	}
+}
+
+func TestNormalizeCode_AcceptsBothVocabularies(t *testing.T) {
+	for _, tc := range canonicalMapping {
+		// Snake input → expect (snake, short, nil).
+		snake, short, err := NormalizeCode(tc.Snake)
+		if err != nil {
+			t.Errorf("NormalizeCode(%q): unexpected error: %v", tc.Snake, err)
+		}
+		if snake != tc.Snake || short != tc.Short {
+			t.Errorf("NormalizeCode(%q): got (%q,%q); want (%q,%q)",
+				tc.Snake, snake, short, tc.Snake, tc.Short)
+		}
+		// Short input → same canonical pair.
+		snake2, short2, err := NormalizeCode(tc.Short)
+		if err != nil {
+			t.Errorf("NormalizeCode(%q): unexpected error: %v", tc.Short, err)
+		}
+		if snake2 != tc.Snake || short2 != tc.Short {
+			t.Errorf("NormalizeCode(%q): got (%q,%q); want (%q,%q)",
+				tc.Short, snake2, short2, tc.Snake, tc.Short)
+		}
+	}
+}
+
+func TestNormalizeCode_RejectsGarbage(t *testing.T) {
+	_, _, err := NormalizeCode("not_a_code")
+	if !errors.Is(err, ErrInvalidReasonCode) {
+		t.Errorf("NormalizeCode(\"not_a_code\"): want ErrInvalidReasonCode, got %v", err)
+	}
+}
+
+func TestIsValidShortCode(t *testing.T) {
+	for _, tc := range canonicalMapping {
+		if !IsValidShortCode(tc.Short) {
+			t.Errorf("IsValidShortCode(%q): expected true, got false", tc.Short)
+		}
+	}
+	if IsValidShortCode("alf") {
+		t.Error("IsValidShortCode(\"alf\"): expected false (case-sensitive), got true")
+	}
+	if IsValidShortCode("ZZZ") {
+		t.Error("IsValidShortCode(\"ZZZ\"): expected false, got true")
+	}
+}
+
+func TestValidShortCodes_MatchesCanonical(t *testing.T) {
+	if got := len(ValidShortCodes); got != 20 {
+		t.Errorf("ValidShortCodes: want 20 codes, got %d", got)
+	}
+	if len(ValidShortCodes) != len(canonicalMapping) {
+		t.Fatalf("ValidShortCodes length %d != canonicalMapping length %d",
+			len(ValidShortCodes), len(canonicalMapping))
+	}
+	for i, want := range canonicalMapping {
+		if ValidShortCodes[i] != want.Short {
+			t.Errorf("ValidShortCodes[%d] = %q; want %q", i, ValidShortCodes[i], want.Short)
+		}
+	}
+}
+
+func TestOverrideReason_Validate_DerivesShortFromSnake(t *testing.T) {
+	o := OverrideReason{
+		RecommendationID:    "rec-1",
+		ReasonCode:          "patient_preference",
+		AppropriatenessFlag: "appropriate_override",
+		Reasoning:           "rationale",
+		CapturedAt:          time.Now(),
+		CapturedBy:          "rx-1",
+	}
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate: unexpected error: %v", err)
+	}
+	if o.ReasonCodeShort != "PPF" {
+		t.Errorf("derived ReasonCodeShort = %q; want PPF", o.ReasonCodeShort)
+	}
+}
+
+func TestOverrideReason_Validate_AcceptsConsistentBothSet(t *testing.T) {
+	o := OverrideReason{
+		RecommendationID:    "rec-2",
+		ReasonCode:          "alert_fatigue",
+		ReasonCodeShort:     "ALF",
+		AppropriatenessFlag: "appropriate_override",
+		Reasoning:           "rationale",
+		CapturedAt:          time.Now(),
+		CapturedBy:          "rx-2",
+	}
+	if err := o.Validate(); err != nil {
+		t.Errorf("Validate with consistent pair: unexpected error: %v", err)
+	}
+}
+
+func TestOverrideReason_Validate_RejectsInconsistentBothSet(t *testing.T) {
+	o := OverrideReason{
+		RecommendationID:    "rec-3",
+		ReasonCode:          "alert_fatigue",
+		ReasonCodeShort:     "PPF", // wrong: ALF would be canonical
+		AppropriatenessFlag: "appropriate_override",
+		Reasoning:           "rationale",
+		CapturedAt:          time.Now(),
+		CapturedBy:          "rx-3",
+	}
+	err := o.Validate()
+	if err == nil {
+		t.Fatal("Validate with inconsistent pair: expected error, got nil")
+	}
+	if !errors.Is(err, ErrInconsistentReasonCodes) {
+		t.Errorf("Validate with inconsistent pair: want ErrInconsistentReasonCodes, got %v", err)
+	}
+}

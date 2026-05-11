@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -31,13 +32,20 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
+	"database/sql"
+
 	"github.com/cardiofit/kb32/internal/api"
+	"github.com/cardiofit/kb32/internal/appropriateness"
 	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
+	"github.com/cardiofit/kb32/internal/framing"
+	"github.com/cardiofit/kb32/internal/lifecycle"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
+	kb32pg "github.com/cardiofit/kb32/internal/store/postgres"
 	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
+	"github.com/cardiofit/shared/v2_substrate/permissions"
 )
 
 // cqlRuntimeURL is the base URL for the kb-cql-runtime HAPI endpoint.
@@ -47,6 +55,12 @@ const defaultCQLRuntimeURL = "http://kb-cql-runtime:8095"
 // Version is emitted at startup and returned by /healthz.
 // Bumped by each phase-2a task that changes the service's behaviour.
 const Version = "0.1.0-phase-2a"
+
+// Compile-time conformance: SubstrateBackedScorer satisfies
+// api.AppropriatenessSource. Declared here (rather than inside the
+// appropriateness package) because appropriateness cannot import api without
+// creating a cycle (api → appropriateness → api).
+var _ api.AppropriatenessSource = (*appropriateness.SubstrateBackedScorer)(nil)
 
 func main() {
 	// -----------------------------------------------------------------------
@@ -76,6 +90,47 @@ func main() {
 	}
 
 	port := getenv("PORT", "8150")
+
+	// -----------------------------------------------------------------------
+	// Phase 2-completion Task 7: permissions middleware wiring
+	//
+	// When KB32_PERMISSIONS_ENFORCED=true, construct the Phase 1a
+	// permissions.Middleware over a Postgres-backed Store + DataConsentStore
+	// and wrap the craft routes (mirrors kb-30's pattern, see
+	// kb-30-authorisation-evaluator/cmd/server/main.go lines 94–128).
+	//
+	// Default OFF: when the env var is unset/false, permsMW stays nil and
+	// ginPermMW returns a passthrough so existing tests / dev boots that do
+	// not carry JWT viewer-role headers continue to work unchanged.
+	//
+	// Fail-closed at startup: if enforcement is requested but VAIDSHALA_DSN
+	// cannot be opened, log.Fatal — silently falling back to passthrough
+	// would be a security regression.
+	// -----------------------------------------------------------------------
+	var permsMW *permissions.Middleware
+	if strings.EqualFold(os.Getenv("KB32_PERMISSIONS_ENFORCED"), "true") {
+		permDB, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf(
+				"kb-32: KB32_PERMISSIONS_ENFORCED=true but sql.Open(postgres) "+
+					"for VAIDSHALA_DSN failed: %v", err,
+			)
+		}
+		if err := permDB.Ping(); err != nil {
+			log.Fatalf(
+				"kb-32: KB32_PERMISSIONS_ENFORCED=true but Ping VAIDSHALA_DSN "+
+					"for permissions store failed: %v", err,
+			)
+		}
+		permStore := permissions.NewPostgresStore(permDB)
+		consentStore := permissions.NewPostgresDataConsentStore(permDB)
+		permsMW = permissions.NewMiddleware(permStore, consentStore, nil /* NoopAuditEmitter */)
+		log.Printf("kb-32: permissions enforcement: ON (VAIDSHALA_DSN connected)")
+	} else {
+		log.Printf(
+			"kb-32: permissions enforcement: OFF (passthrough mode — DO NOT use in production)",
+		)
+	}
 
 	// -----------------------------------------------------------------------
 	// HTTP server setup
@@ -115,24 +170,67 @@ func main() {
 	// for rule evaluation — snapshot assembly uses an in-memory placeholder that
 	// returns a minimal ClinicalSnapshot so the service starts and routes work).
 	//
-	// Production wiring: replace inMemorySubstrateClient with a Postgres-backed
-	// implementation that reads from the v2_substrate residents table.
-	substrateClient := &inMemorySubstrateClient{dsn: dsn}
+	// Production wiring: PostgresSubstrateClient reads kb-20-patient-profile
+	// data (scoring instruments, care-intensity, active concerns, capacity,
+	// lab entries) and assembles a ClinicalSnapshot. In dev mode the
+	// in-memory placeholder is retained so the service starts without a
+	// real DB attached. See internal/store/postgres/substrate_client.go for
+	// the kb-20 → ClinicalSnapshot mapping.
+	// EthicsLog substrate is constructed early so the Stage 7 EvidenceTrace
+	// emitter (Phase 2-completion Task 4) can share the same store with the
+	// /v1/explain endpoint's deep-audit reader. Phase 2-completion keeps the
+	// store in-memory; Phase 3+ will swap for a Postgres-backed Store.
+	logStore := ethics_log.NewInMemoryStore()
+
+	var (
+		substrateClient  kb32ctx.SubstrateClient
+		citationRegistry citations.Registry
+		evidenceTracer   lifecycle.EvidenceTraceEmitter
+	)
+	if devMode {
+		substrateClient = &inMemorySubstrateClient{dsn: dsn}
+		// Phase 2a in-memory placeholder retained for dev-mode boots without
+		// a real Postgres attached.
+		citationRegistry = citations.NewInMemoryRegistry()
+		// Dev wiring: EthicsLog-only emitter. Postgres emitter is omitted so
+		// the service can boot without migration 045 applied.
+		evidenceTracer = lifecycle.NewEthicsLogEmitter(ethics_log.NewLogger(logStore))
+	} else {
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("kb-32: sql.Open(postgres) failed: %v", err)
+		}
+		substrateClient = kb32pg.NewPostgresSubstrateClient(db)
+		// Phase 2-completion Task 3: PostgresRegistry over migration 043.
+		// Shares the same *sql.DB as the substrate client — do NOT open a
+		// second connection pool against the same DSN.
+		citationRegistry = citations.NewPostgresRegistry(db)
+		// Phase 2-completion Task 4: dual-emission Stage 7 audit trail.
+		// EthicsLog + Postgres fan-out; either failure fails the pipeline
+		// (fail-hard), so a missed trace surfaces immediately.
+		evidenceTracer = lifecycle.NewCompositeEmitter(
+			lifecycle.NewEthicsLogEmitter(ethics_log.NewLogger(logStore)),
+			lifecycle.NewPostgresEmitter(db),
+		)
+	}
 	assembler := kb32ctx.NewAssembler(substrateClient)
 
 	// Stage 2: reasoning chain builder backed by the real HAPI client.
 	hapiClient := reasoning.NewHAPIClient(cqlRuntimeURL)
 	chain := reasoning.NewChainBuilder(hapiClient)
 
-	// Stages 4–6 use the DefaultAppropriatenessSource (all dims at 3).
-	// Replace with a real scorer in Phase 2b.
-	appSrc := api.DefaultAppropriatenessSource{}
+	// Stage 4 appropriateness gate: SubstrateBackedScorer (Phase 2-completion
+	// Task 2) replaces DefaultAppropriatenessSource. It scores the five
+	// dimensions against the ClinicalSnapshot + Packet + ApplicableRule
+	// produced by Stages 1–3 — see internal/appropriateness/substrate_scorer.go.
+	appSrc := appropriateness.NewSubstrateBackedScorer()
 
-	// Citation registry — Phase 2a placeholder: InMemoryRegistry with two seed
-	// source versions covering the PostFall and primary drug-safety rule sets.
-	// Phase 2-completion will swap this for citations.NewPostgresRegistry(db)
-	// backed by migration 043.
-	citationRegistry := citations.NewInMemoryRegistry()
+	// Seed the citation registry with the canonical source identifiers used
+	// by Phase 2 rule packs. Insertion goes through the Registry interface so
+	// the same code path works for InMemoryRegistry (dev) and PostgresRegistry
+	// (prod). On Postgres, repeated boots are idempotent: ErrVersionExists is
+	// a logged warning, NOT a fatal — production startup must not fail because
+	// migration 043 already contains the seeded rows from a prior boot.
 	seedCtx := context.Background()
 	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, sv := range []citations.SourceVersion{
@@ -152,11 +250,17 @@ func main() {
 		},
 	} {
 		if err := citationRegistry.Register(seedCtx, sv); err != nil {
+			if errors.Is(err, citations.ErrVersionExists) {
+				log.Printf("kb-32: citation seed already present (idempotent): source=%s version=%s",
+					sv.SourceID, sv.Version)
+				continue
+			}
 			log.Printf("kb-32: citation registry seed warning: %v", err)
 		}
 	}
 
-	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry)
+	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry).
+		WithEvidenceTracer(evidenceTracer)
 	// TODO(phase-2-completion): wire capacity.Gate via pipeline.WithCapacityGate
 	// once the Postgres-backed CapacitySource (vulnerability + restrictive-practice
 	// consent reads) lands. The Gate API ships in Phase 3 Task 3; production
@@ -169,13 +273,47 @@ func main() {
 	overrideStore := overrides.NewInMemoryStore()
 	overrideHandler := api.NewOverrideHandler(overrideStore)
 
+	// Phase 2-completion Task 6: prescriber framing opt-out store.
+	// Dual-mode wiring matches the rest of the Phase 2-completion stores —
+	// in-memory for dev boots, Postgres over migration 047 otherwise. The
+	// store is the authoritative source for the toxicity-guard #3 opt-out
+	// signal that PerGPObserver.Suggest reads on every Suggest call (see
+	// internal/framing/per_gp_observer.go and optout_store.go).
+	var optOutStore framing.OptOutStore
+	if devMode {
+		optOutStore = framing.NewInMemoryOptOutStore()
+	} else {
+		// Reuse the existing *sql.DB opened above for the substrate client
+		// / citation registry / evidence-trace emitter rather than opening
+		// a second pool against the same DSN.
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("kb-32: sql.Open(postgres) for opt-out store failed: %v", err)
+		}
+		optOutStore = framing.NewPostgresOptOutStore(db)
+	}
+	optOutHandler := api.NewOptOutHandler(optOutStore)
+
 	v1 := r.Group("/v1/craft")
-	v1.POST("/draft", handler.HandleDraft)
+
+	// Phase 2-completion Task 7: PDP permissions middleware mounted over
+	// the two craft write routes. permsMW is nil when
+	// KB32_PERMISSIONS_ENFORCED is unset/false (ginPermMW returns a
+	// passthrough), preserving the existing dev/test boot semantics.
+	// PDP (Pharmacist-Default-Private) is the correct VisibilityClass for
+	// resident-clinical writes; see internal/api/permissions_middleware.go
+	// package doc for rationale (the kb-32 main.go pre-Task-7 TODOs at
+	// the old line 259 / 306 already named PDP as the target class).
+	v1.POST("/draft",
+		api.GinPermMW(permsMW, "kb32_craft_draft", permissions.PDP),
+		handler.HandleDraft,
+	)
 
 	// POST /v1/craft/override/:recommendation_id
-	// NOTE: PDP middleware NOT mounted — Phase 2-completion follow-up.
-	// See override_handlers.go package comment for deferral rationale.
-	v1.POST("/override/:recommendation_id", overrideHandler.HandleCapture)
+	v1.POST("/override/:recommendation_id",
+		api.GinPermMW(permsMW, "kb32_craft_override", permissions.PDP),
+		overrideHandler.HandleCapture,
+	)
 
 	// -----------------------------------------------------------------------
 	// /v1/explain/:decision_id — Layer 4 deep-audit endpoint
@@ -200,7 +338,9 @@ func main() {
 	// behind whatever ingress filter sits in front of the service.
 	// -----------------------------------------------------------------------
 	mdStore := decision_metadata.NewInMemoryStore()
-	logStore := ethics_log.NewInMemoryStore()
+	// logStore is constructed earlier alongside the EvidenceTrace emitter so
+	// the Stage 7 ledger and the /v1/explain Layer-4 reader share the same
+	// in-memory substrate during Phase 2-completion.
 	explainHandler := api.NewExplainHandler(
 		mdStore,
 		logStore,
@@ -209,6 +349,23 @@ func main() {
 	)
 	v1Explain := r.Group("/v1/explain")
 	v1Explain.GET("/:decision_id", explainHandler.HandleExplain)
+
+	// -----------------------------------------------------------------------
+	// /v1/framing/optout/:gp_id — prescriber framing opt-out (Task 6)
+	//
+	// POST registers (or refreshes) an opt-out; DELETE revokes. Both are
+	// idempotent — see internal/api/optout_handlers.go for the per-status
+	// contract. Writes flow into the prescriber_framing_optout substrate
+	// (migration 047) that PerGPObserver.Suggest reads at Suggest time.
+	//
+	// TODO(phase-2-completion Task 7): wrap with permissions.Middleware
+	// alongside /v1/craft/draft and /v1/craft/override once the PDP
+	// enforcement task lands. Until then the routes are reachable to any
+	// authenticated caller and ingress filtering is the only access control.
+	// -----------------------------------------------------------------------
+	v1Framing := r.Group("/v1/framing")
+	v1Framing.POST("/optout/:gp_id", optOutHandler.HandleRegister)
+	v1Framing.DELETE("/optout/:gp_id", optOutHandler.HandleRevoke)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
