@@ -33,9 +33,19 @@ import (
 //
 // recommendation_id is captured from the URL path parameter, not the body.
 // captured_by is populated from the JWT viewer role (permissions.ViewerRoleFrom).
+//
+// Dual-vocabulary input: callers may supply ReasonCode (snake_case), the
+// corresponding ReasonCodeShort (Guidelines Part 5 three-letter), or both.
+// OverrideReason.Validate() derives the missing form and rejects
+// inconsistent pairs (ErrInconsistentReasonCodes).
 type OverrideCaptureRequest struct {
-	// ReasonCode is one of the 20 canonical override reason codes (Guidelines §5).
-	ReasonCode string `json:"reason_code" binding:"required"`
+	// ReasonCode is the snake_case override reason from the canonical 20
+	// (Guidelines §5). Required if ReasonCodeShort is not supplied.
+	ReasonCode string `json:"reason_code"`
+
+	// ReasonCodeShort is the Guidelines Part 5 three-letter code. Optional
+	// when ReasonCode is supplied; must be consistent if both are present.
+	ReasonCodeShort string `json:"reason_code_short"`
 
 	// AppropriatenessFlag classifies the override as "appropriate_override",
 	// "inappropriate_override", or "mixed".
@@ -46,6 +56,10 @@ type OverrideCaptureRequest struct {
 }
 
 // OverrideCaptureResponse is the JSON response body returned on 201 Created.
+//
+// Dual-vocabulary: both reason_code (snake_case, application primary) and
+// reason_code_short (Guidelines Part 5 three-letter) are serialised so
+// regulators and dashboards can pick whichever vocabulary they target.
 type OverrideCaptureResponse struct {
 	// ID is the UUID of the persisted override record.
 	ID string `json:"id"`
@@ -53,8 +67,12 @@ type OverrideCaptureResponse struct {
 	// RecommendationID echoes the path parameter for caller convenience.
 	RecommendationID string `json:"recommendation_id"`
 
-	// ReasonCode echoes the persisted reason code.
+	// ReasonCode echoes the persisted snake_case reason code.
 	ReasonCode string `json:"reason_code"`
+
+	// ReasonCodeShort echoes the Guidelines Part 5 three-letter code
+	// corresponding to ReasonCode (e.g. "ALF" for "alert_fatigue").
+	ReasonCodeShort string `json:"reason_code_short"`
 
 	// AppropriatenessFlag echoes the persisted flag.
 	AppropriatenessFlag string `json:"appropriateness_flag"`
@@ -110,9 +128,20 @@ func (h *OverrideHandler) HandleCapture(c *gin.Context) {
 	}
 
 	// Build the OverrideReason and run Validate() from Task 1's taxonomy.
+	// Dual-vocabulary: if the client supplied only ReasonCodeShort, resolve
+	// the snake_case form first so Validate() (which keys on ReasonCode) can
+	// proceed. If neither vocabulary is supplied, Validate() will reject via
+	// ErrInvalidReasonCode below.
+	reasonCode := req.ReasonCode
+	if reasonCode == "" && req.ReasonCodeShort != "" {
+		if snake, ok := overrides.ToReasonCode(req.ReasonCodeShort); ok {
+			reasonCode = snake
+		}
+	}
 	reason := overrides.OverrideReason{
 		RecommendationID:    rawID,
-		ReasonCode:          req.ReasonCode,
+		ReasonCode:          reasonCode,
+		ReasonCodeShort:     req.ReasonCodeShort,
 		AppropriatenessFlag: req.AppropriatenessFlag,
 		Reasoning:           req.Reasoning,
 	}
@@ -130,6 +159,8 @@ func (h *OverrideHandler) HandleCapture(c *gin.Context) {
 		switch {
 		case errors.Is(err, overrides.ErrInvalidReasonCode):
 			msg = "reason_code: " + err.Error()
+		case errors.Is(err, overrides.ErrInconsistentReasonCodes):
+			msg = "reason_code_short: " + err.Error()
 		case errors.Is(err, overrides.ErrInvalidFlag):
 			msg = "appropriateness_flag: " + err.Error()
 		case errors.Is(err, overrides.ErrEmptyReasoning):
@@ -151,6 +182,7 @@ func (h *OverrideHandler) HandleCapture(c *gin.Context) {
 		ID:                  persisted.ID,
 		RecommendationID:    persisted.RecommendationID,
 		ReasonCode:          persisted.ReasonCode,
+		ReasonCodeShort:     persisted.ReasonCodeShort,
 		AppropriatenessFlag: persisted.AppropriatenessFlag,
 	})
 }
