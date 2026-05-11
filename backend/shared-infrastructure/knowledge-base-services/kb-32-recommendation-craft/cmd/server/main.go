@@ -34,6 +34,7 @@ import (
 	"database/sql"
 
 	"github.com/cardiofit/kb32/internal/api"
+	"github.com/cardiofit/kb32/internal/appropriateness"
 	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/overrides"
@@ -50,6 +51,12 @@ const defaultCQLRuntimeURL = "http://kb-cql-runtime:8095"
 // Version is emitted at startup and returned by /healthz.
 // Bumped by each phase-2a task that changes the service's behaviour.
 const Version = "0.1.0-phase-2a"
+
+// Compile-time conformance: SubstrateBackedScorer satisfies
+// api.AppropriatenessSource. Declared here (rather than inside the
+// appropriateness package) because appropriateness cannot import api without
+// creating a cycle (api → appropriateness → api).
+var _ api.AppropriatenessSource = (*appropriateness.SubstrateBackedScorer)(nil)
 
 func main() {
 	// -----------------------------------------------------------------------
@@ -140,9 +147,11 @@ func main() {
 	hapiClient := reasoning.NewHAPIClient(cqlRuntimeURL)
 	chain := reasoning.NewChainBuilder(hapiClient)
 
-	// Stages 4–6 use the DefaultAppropriatenessSource (all dims at 3).
-	// Replace with a real scorer in Phase 2b.
-	appSrc := api.DefaultAppropriatenessSource{}
+	// Stage 4 appropriateness gate: SubstrateBackedScorer (Phase 2-completion
+	// Task 2) replaces DefaultAppropriatenessSource. It scores the five
+	// dimensions against the ClinicalSnapshot + Packet + ApplicableRule
+	// produced by Stages 1–3 — see internal/appropriateness/substrate_scorer.go.
+	appSrc := appropriateness.NewSubstrateBackedScorer()
 
 	// Citation registry — Phase 2a placeholder: InMemoryRegistry with two seed
 	// source versions covering the PostFall and primary drug-safety rule sets.
