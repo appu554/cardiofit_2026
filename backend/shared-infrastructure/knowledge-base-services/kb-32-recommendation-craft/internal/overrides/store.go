@@ -12,10 +12,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cardiofit/shared/v2_substrate/failed_interventions"
 )
 
 // ---------------------------------------------------------------------------
@@ -82,9 +85,18 @@ type storedOverride struct {
 // The RuleID is stored as a separate field on the internal record; callers
 // should use CreateForRule (instead of Create) when they need ListByRule to
 // work correctly. Create stores an empty RuleID.
+//
+// firStore (optional) is the Failed Intervention History writer. When non-nil,
+// the rule-aware createInternal path (i.e. CreateForRule with a non-empty
+// ruleID) will attempt a best-effort FIR write after the override is persisted
+// — see createInternal for the hook semantics. The plain Create path does NOT
+// attempt FIR writes because it lacks rule context (the FIR
+// InterventionType vocabulary is derived from the rule ID via
+// failed_interventions.ClassifyInterventionType).
 type InMemoryStore struct {
-	mu      sync.RWMutex
-	records map[string]storedOverride
+	mu       sync.RWMutex
+	records  map[string]storedOverride
+	firStore failed_interventions.Store
 }
 
 // NewInMemoryStore returns an empty, ready-to-use InMemoryStore.
@@ -92,20 +104,28 @@ func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{records: make(map[string]storedOverride)}
 }
 
+// WithFailedInterventionStore wires the FIR writer used by the rule-aware
+// CreateForRule path. Safe to call once at construction; not safe for
+// concurrent reconfiguration during request handling.
+func (s *InMemoryStore) WithFailedInterventionStore(fir failed_interventions.Store) *InMemoryStore {
+	s.firStore = fir
+	return s
+}
+
 // Create persists r, assigning a new UUID as ID and setting CapturedAt if
 // zero. Returns the populated record.
-func (s *InMemoryStore) Create(_ context.Context, r OverrideReason) (OverrideReason, error) {
-	return s.createInternal(r, "")
+func (s *InMemoryStore) Create(ctx context.Context, r OverrideReason) (OverrideReason, error) {
+	return s.createInternal(ctx, r, "")
 }
 
 // CreateForRule persists r associated with ruleID. This is a test-helper that
 // allows ListByRule and PatternSummary to work correctly without a real
 // recommendations table.
-func (s *InMemoryStore) CreateForRule(_ context.Context, r OverrideReason, ruleID string) (OverrideReason, error) {
-	return s.createInternal(r, ruleID)
+func (s *InMemoryStore) CreateForRule(ctx context.Context, r OverrideReason, ruleID string) (OverrideReason, error) {
+	return s.createInternal(ctx, r, ruleID)
 }
 
-func (s *InMemoryStore) createInternal(r OverrideReason, ruleID string) (OverrideReason, error) {
+func (s *InMemoryStore) createInternal(ctx context.Context, r OverrideReason, ruleID string) (OverrideReason, error) {
 	if r.ID == "" {
 		r.ID = uuid.New().String()
 	}
@@ -124,9 +144,76 @@ func (s *InMemoryStore) createInternal(r OverrideReason, ruleID string) (Overrid
 		}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.records[r.ID] = storedOverride{OverrideReason: r, RuleID: ruleID}
+	s.mu.Unlock()
+
+	// CAPE substrate hook: when called via CreateForRule with a non-empty
+	// ruleID AND the override's ReasonCode signals a documented reversal
+	// (one of the failure-outcome ACOP extensions), write a
+	// FailedInterventionRecord. Best-effort: log on error but do NOT fail
+	// the override write — override capture is the primary audit path.
+	//
+	// Known gap: ResidentID is not carried on OverrideReason in Phase 2-
+	// completion (the HTTP boundary at /v1/craft/override/:recommendation_id
+	// only receives recommendation_id, not resident_id). Until the override
+	// flow is widened to carry ResidentID, FIR rows are written with
+	// uuid.Nil; CAPE Layer 4 readers must resolve the resident via the
+	// recommendations table join. This is acceptable substrate-prerequisite
+	// behaviour; kb-33 hardens the join.
+	if ruleID != "" && s.firStore != nil {
+		writeFIRBestEffort(ctx, s.firStore, r, ruleID)
+	}
 	return r, nil
+}
+
+// reversalReasonCodes is the set of override ReasonCodes that classify the
+// override as a documented clinical reversal — these populate the CAPE
+// Layer 4 Failed Intervention History. All are ACOP extensions from the
+// taxonomy (see taxonomy.go); Wright/McCoy foundation codes (alert fatigue,
+// workflow constraint, etc.) describe alert handling, NOT clinical
+// reversal, and so do NOT generate FIR rows.
+var reversalReasonCodes = map[string]string{
+	"goals_of_care_aligned":    failed_interventions.OutcomeGoalsOfCareAligned,
+	"frailty_consideration":    failed_interventions.OutcomeReversedDueToFrailty,
+	"deprescribing_underway":   failed_interventions.OutcomeReversedDueToClinicalDecline,
+	"family_consensus_pending": failed_interventions.OutcomeReversedDueToFamilyRequest,
+	"trial_period_active":      failed_interventions.OutcomeReversedDueToClinicalDecline,
+}
+
+// writeFIRBestEffort attempts a CAPE Layer-4 FIR write. Errors are logged
+// (not propagated) per the design note in createInternal / PostgresStore
+// CreateForRule. ctx may be context.Background() for the InMemoryStore path
+// since the in-memory implementation ignores it.
+func writeFIRBestEffort(ctx context.Context, fir failed_interventions.Store, r OverrideReason, ruleID string) {
+	interventionType, classified := failed_interventions.ClassifyInterventionType(ruleID)
+	if !classified {
+		return
+	}
+	outcome, ok := reversalReasonCodes[r.ReasonCode]
+	if !ok {
+		return
+	}
+	authorID, err := uuid.Parse(r.CapturedBy)
+	if err != nil {
+		authorID = uuid.Nil
+	}
+	now := time.Now().UTC()
+	rec := failed_interventions.FailedInterventionRecord{
+		// ResidentID intentionally uuid.Nil — see Known gap note in
+		// createInternal. The OverrideReason struct does not currently
+		// carry ResidentID; widening it is out of scope for this task.
+		ResidentID:        uuid.Nil,
+		InterventionType:  interventionType,
+		AttemptDate:       now,
+		Outcome:           outcome,
+		DocumentedReason:  r.Reasoning,
+		RetryEligibleDate: now.Add(failed_interventions.DefaultRetryWindow),
+		DocumentedBy:      authorID,
+	}
+	if err := fir.Record(ctx, rec); err != nil {
+		log.Printf("overrides: failed to record FailedInterventionRecord (rule=%s, reason=%s): %v",
+			ruleID, r.ReasonCode, err)
+	}
 }
 
 // Get returns the OverrideReason for id, or (zero, ErrNotFound) if absent.
@@ -188,14 +275,46 @@ func (s *InMemoryStore) PatternSummary(_ context.Context, ruleID string, since t
 //
 // The materialised view rule_override_patterns is used by PatternSummary for
 // bulk aggregation; for small windows the direct table query is used instead.
+//
+// firStore (optional) is the Failed Intervention History writer, mirroring
+// InMemoryStore's hook. CAPE substrate writes only flow from CreateForRule;
+// the plain Create path lacks rule context and is intentionally inert
+// w.r.t. FIR.
 type PostgresStore struct {
-	db *sql.DB
+	db       *sql.DB
+	firStore failed_interventions.Store
 }
 
 // NewPostgresStore constructs a PostgresStore from an open *sql.DB.
 // The caller retains ownership of db and must close it after use.
 func NewPostgresStore(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
+}
+
+// WithFailedInterventionStore wires the FIR writer used by the rule-aware
+// CreateForRule path. Safe to call once at construction.
+func (s *PostgresStore) WithFailedInterventionStore(fir failed_interventions.Store) *PostgresStore {
+	s.firStore = fir
+	return s
+}
+
+// CreateForRule persists r and, when applicable, writes a CAPE Failed
+// Intervention History row. The override insert reuses Create's path; the
+// FIR write is best-effort (logged but non-fatal). The recommendations
+// table is expected to already carry the (recommendation_id, rule_id)
+// linkage so ListByRule and PatternSummary continue to function against
+// the plain Create path — this CreateForRule overload exists to give the
+// CAPE substrate writer access to ruleID at insert time. See InMemoryStore
+// docstring for the symmetric design.
+func (s *PostgresStore) CreateForRule(ctx context.Context, r OverrideReason, ruleID string) (OverrideReason, error) {
+	out, err := s.Create(ctx, r)
+	if err != nil {
+		return out, err
+	}
+	if ruleID != "" && s.firStore != nil {
+		writeFIRBestEffort(ctx, s.firStore, out, ruleID)
+	}
+	return out, nil
 }
 
 // Create inserts r into recommendation_override_reasons, assigning a new UUID

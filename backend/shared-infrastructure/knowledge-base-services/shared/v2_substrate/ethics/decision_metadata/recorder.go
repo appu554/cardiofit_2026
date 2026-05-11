@@ -30,6 +30,13 @@ type Metadata struct {
 	ContestationEnabled  bool
 	AuditTraceRef        uuid.UUID
 	Timestamp            time.Time
+	// RecommendationID is the kb-32 recommendation UUID associated with this
+	// decision, used to link the decision to its fire-time citations via
+	// citations.Registry.ListCitations. Optional: zero value (uuid.Nil)
+	// means "no associated recommendation" (e.g., decisions that are not
+	// recommendation drafts) — readers must treat uuid.Nil as a sentinel
+	// and skip the citation lookup.
+	RecommendationID uuid.UUID
 }
 
 // Store is the persistence boundary for Metadata records.

@@ -1,0 +1,258 @@
+syntax = "proto3";
+
+package cardiofit.kb33.observation.v1;
+
+option go_package = "github.com/cardiofit/kb33/proto/observation/v1;observationv1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// ObservationLayer service — single source of truth for resident-level
+// observations consumed by all action-layer services (PharmacistWorklistService,
+// RACHOperationalView, GovernanceWorkspace).
+//
+// Action-layer services do NOT bypass this layer to write their own
+// observations (CAPE Addendum line 190). All RPCs are READ-ONLY.
+//
+// Spec: docs/superpowers/plans/CAPE_v1_1_Architectural_Commitment_Addendum.md
+//       lines 150–188.
+// =============================================================================
+
+service ObservationLayer {
+  // Resident-scoped reads
+  rpc GetResidentScoring(ResidentRequest) returns (FiveLayerScoring);
+  rpc GetSignalDetections(ResidentTimeWindowRequest) returns (SignalList);
+  rpc GetInstabilityChronology(ResidentTimeWindowRequest) returns (Chronology);
+  rpc GetTrajectoryPrimitives(ResidentRequest) returns (TrajectoryComposite);
+
+  // Substrate + audit reads
+  rpc GetSubstrateState(ResidentRequest) returns (SubstrateSnapshot);
+  rpc GetEvidenceTrace(EvidenceQueryRequest) returns (EvidenceGraph);
+  rpc GetFailedInterventionHistory(ResidentRequest) returns (FailedInterventionList);
+
+  // Facility-scoped reads
+  rpc GetFacilityPatterns(FacilityRequest) returns (FacilityPatternList);
+  rpc GetResidentList(FacilityFilterRequest) returns (ResidentSummaryList);
+
+  // Facility aggregation
+  rpc GetFacilityInstabilityOverview(FacilityTimeWindowRequest) returns (FacilityInstability);
+  rpc GetResidentCluster(FacilityClusterRequest) returns (ResidentClusterList);
+}
+
+// =============================================================================
+// Common request types
+// =============================================================================
+
+message ResidentRequest {
+  string resident_id = 1;  // UUID as string per project convention
+}
+
+message TimeWindow {
+  google.protobuf.Timestamp start = 1;  // inclusive
+  google.protobuf.Timestamp end   = 2;  // exclusive (half-open, matches Go TimeWindow)
+}
+
+message ResidentTimeWindowRequest {
+  string     resident_id = 1;
+  TimeWindow window      = 2;
+}
+
+message FacilityRequest {
+  string facility_id = 1;
+}
+
+message FacilityTimeWindowRequest {
+  string     facility_id = 1;
+  TimeWindow window      = 2;
+}
+
+message EvidenceQueryRequest {
+  string resident_id       = 1;
+  string recommendation_id = 2;  // optional; empty = all
+  TimeWindow window        = 3;  // optional
+}
+
+message FacilityFilterRequest {
+  string facility_id  = 1;
+  // Filter criteria. Underspecified in CAPE; minimal shape for Phase 1.
+  string severity_min = 2;  // e.g., "3" — accept string for forward-compat
+  string sort_by      = 3;  // e.g., "severity_desc", "last_event"
+  int32  limit        = 4;
+}
+
+message FacilityClusterRequest {
+  string facility_id       = 1;
+  string cluster_criteria  = 2;  // e.g., "shared_psychotropic_class"
+}
+
+// =============================================================================
+// Response: fully-specified messages (match Go types from Tasks B + C + D)
+// =============================================================================
+
+// Severity is 1..5 per project convention (PRN velocity, CAPE scoring layers).
+// Encoded as int32; consumers validate range.
+message Severity {
+  int32 value = 1;
+}
+
+// SubstrateReference points to an underlying datum in a substrate package.
+// Matches shared/v2_substrate/instability_chronology.SubstrateReference.
+message SubstrateReference {
+  string substrate_type = 1;  // e.g., "prn_administration", "lab_result"
+  string reference_id   = 2;  // UUID of the referenced row
+  string description    = 3;  // human-readable label
+}
+
+// FailedInterventionRecord matches shared/v2_substrate/failed_interventions.FailedInterventionRecord.
+// Spec: CAPE Guidelines lines 632–640.
+message FailedInterventionRecord {
+  string                    resident_id          = 1;
+  string                    intervention_type    = 2;
+  google.protobuf.Timestamp attempt_date         = 3;
+  string                    outcome              = 4;
+  string                    documented_reason    = 5;
+  google.protobuf.Timestamp retry_eligible_date  = 6;
+  string                    documented_by        = 7;
+}
+
+message FailedInterventionList {
+  repeated FailedInterventionRecord records = 1;
+}
+
+// ChronologyEvent matches shared/v2_substrate/instability_chronology.ChronologyEvent.
+message ChronologyEvent {
+  string                      event_id         = 1;
+  google.protobuf.Timestamp   timestamp        = 2;
+  string                      event_type       = 3;
+  string                      primitive_type   = 4;  // InstabilityPrimitive string value
+  Severity                    severity         = 5;
+  string                      description      = 6;
+  repeated SubstrateReference substrate_refs   = 7;
+  repeated string             suspected_causes = 8;
+  repeated string             related_events   = 9;  // EventIDs
+}
+
+// TemporalPattern matches shared/v2_substrate/instability_chronology.TemporalPattern.
+message TemporalPattern {
+  string          pattern_id     = 1;
+  repeated string event_sequence = 2;  // EventIDs
+  string          reasoning      = 3;
+  double          confidence     = 4;
+}
+
+// ChronologyRendering matches shared/v2_substrate/instability_chronology.ChronologyRendering.
+message ChronologyRendering {
+  string          audience            = 1;  // AudienceClass string value
+  string          headline            = 2;
+  string          narrative           = 3;
+  repeated string highlighted_events  = 4;  // EventIDs
+}
+
+// Chronology = the proto-side InstabilityChronology.
+message Chronology {
+  string                            resident_id          = 1;
+  TimeWindow                        time_window          = 2;
+  repeated ChronologyEvent          events               = 3;
+  repeated TemporalPattern          patterns             = 4;
+  Severity                          severity             = 5;
+  map<string, ChronologyRendering>  audience_adaptations = 6;
+}
+
+// =============================================================================
+// Response: underspecified messages (CAPE leaves shape pending; minimal viable)
+// =============================================================================
+//
+// Each of the following is a placeholder shape. kb-33 (Roadmap Step 5) authors
+// the full structure. Marked with TODO(kb-33) comments so the gap is visible.
+
+// FiveLayerScoring — CAPE five-layer resident scoring.
+// TODO(kb-33): full shape pending CAPE Part 5 authoring.
+message FiveLayerScoring {
+  string   resident_id = 1;
+  Severity overall     = 2;
+  // Layer-by-layer fields TBD.
+}
+
+// Signal — a detected stability/instability signal.
+// TODO(kb-33): full shape pending CAPE signal taxonomy authoring (Guidelines §6).
+message Signal {
+  string                      signal_id      = 1;
+  string                      signal_class   = 2;
+  Severity                    severity       = 3;
+  google.protobuf.Timestamp   detected_at    = 4;
+  repeated SubstrateReference substrate_refs = 5;
+}
+
+message SignalList {
+  repeated Signal signals = 1;
+}
+
+// TrajectoryComposite — per-parameter velocities and accelerations.
+// TODO(kb-33): full shape pending CAPE Part 6 authoring.
+message TrajectoryComposite {
+  string resident_id = 1;
+  // Per-parameter slices TBD.
+}
+
+// SubstrateSnapshot — state-machine state at a point in time.
+// TODO(kb-33): full shape pending CAPE substrate state machine authoring.
+message SubstrateSnapshot {
+  string                    resident_id = 1;
+  google.protobuf.Timestamp captured_at = 2;
+  // Substrate state fields TBD.
+}
+
+// EvidenceGraph — bidirectional audit graph linking recommendations,
+// decisions, citations, and substrate facts.
+// TODO(kb-33): full shape pending CAPE EvidenceTrace authoring.
+message EvidenceGraph {
+  string resident_id = 1;
+  // Nodes + edges TBD.
+}
+
+// FacilityPattern — a cross-resident pattern at a facility.
+// TODO(kb-33): full shape pending CAPE Part 9 authoring.
+message FacilityPattern {
+  string   pattern_id  = 1;
+  string   facility_id = 2;
+  string   description = 3;
+  Severity severity    = 4;
+}
+
+message FacilityPatternList {
+  repeated FacilityPattern patterns = 1;
+}
+
+// ResidentSummary — list-row representation of a resident.
+// TODO(kb-33): full shape pending S1 worklist authoring.
+message ResidentSummary {
+  string   resident_id = 1;
+  string   display_id  = 2;
+  Severity severity    = 3;
+}
+
+message ResidentSummaryList {
+  repeated ResidentSummary residents = 1;
+}
+
+// FacilityInstability — facility-level instability aggregate.
+// TODO(kb-33): full shape pending RACHOperationalView authoring.
+message FacilityInstability {
+  string                    facility_id    = 1;
+  TimeWindow                window         = 2;
+  int32                     resident_count = 3;
+  int32                     critical_count = 4;
+  // Aggregate fields TBD.
+}
+
+// ResidentCluster — a grouping of residents sharing a clinical criterion.
+// TODO(kb-33): full shape pending CAPE Part 9 cluster taxonomy authoring.
+message ResidentCluster {
+  string          cluster_id       = 1;
+  string          cluster_criteria = 2;
+  repeated string resident_ids     = 3;
+}
+
+message ResidentClusterList {
+  repeated ResidentCluster clusters = 1;
+}

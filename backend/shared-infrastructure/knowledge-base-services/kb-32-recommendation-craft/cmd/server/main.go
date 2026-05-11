@@ -45,6 +45,7 @@ import (
 	kb32pg "github.com/cardiofit/kb32/internal/store/postgres"
 	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
+	"github.com/cardiofit/shared/v2_substrate/failed_interventions"
 	"github.com/cardiofit/shared/v2_substrate/permissions"
 )
 
@@ -270,7 +271,27 @@ func main() {
 
 	// Override store — InMemory in Phase 2b; replace with PostgresStore (VAIDSHALA_DSN)
 	// once migration 042 is applied in a production environment.
-	overrideStore := overrides.NewInMemoryStore()
+	//
+	// CAPE Failed Intervention History substrate (Task B of the CAPE
+	// substrate prerequisites plan): the override store fans out
+	// rule-aware reversals into a FIR store. Dev mode uses in-memory FIR;
+	// production opens a Postgres-backed FIR over migration 047 sharing the
+	// same VAIDSHALA_DSN as the rest of the substrate persistence. The
+	// hook activates only when the override flows through CreateForRule
+	// with a non-empty ruleID and the override's ReasonCode classifies as
+	// a documented clinical reversal. CAPE Layer 4 reads IsVetoActive
+	// against this substrate once kb-33 ships.
+	var firStore failed_interventions.Store
+	if devMode {
+		firStore = failed_interventions.NewInMemoryStore()
+	} else {
+		firDB, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("kb-32: sql.Open(postgres) for FIR store failed: %v", err)
+		}
+		firStore = failed_interventions.NewPostgresStore(firDB)
+	}
+	overrideStore := overrides.NewInMemoryStore().WithFailedInterventionStore(firStore)
 	overrideHandler := api.NewOverrideHandler(overrideStore)
 
 	// Phase 2-completion Task 6: prescriber framing opt-out store.
