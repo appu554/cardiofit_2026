@@ -91,7 +91,12 @@ type ObservationSource interface {
 	PatternFor(ctx context.Context, gpID string) (*FramingPattern, error)
 
 	// HasOptedOut reports whether the GP has registered an opt-out in the
-	// prescriber_framing_optout table.
+	// prescriber_framing_optout table (migration 047).
+	//
+	// Postgres-backed implementations SHOULD delegate this call to
+	// OptOutStore.IsOptedOut (see optout_store.go) so that exactly one
+	// source of truth governs opt-out state: the same row a /v1/framing
+	// HTTP write created/revoked is the row a Suggest-time read observes.
 	HasOptedOut(ctx context.Context, gpID string) (bool, error)
 
 	// RecordObservation persists a single framing observation to the

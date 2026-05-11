@@ -38,6 +38,7 @@ import (
 	"github.com/cardiofit/kb32/internal/appropriateness"
 	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
+	"github.com/cardiofit/kb32/internal/framing"
 	"github.com/cardiofit/kb32/internal/lifecycle"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
@@ -230,6 +231,27 @@ func main() {
 	overrideStore := overrides.NewInMemoryStore()
 	overrideHandler := api.NewOverrideHandler(overrideStore)
 
+	// Phase 2-completion Task 6: prescriber framing opt-out store.
+	// Dual-mode wiring matches the rest of the Phase 2-completion stores —
+	// in-memory for dev boots, Postgres over migration 047 otherwise. The
+	// store is the authoritative source for the toxicity-guard #3 opt-out
+	// signal that PerGPObserver.Suggest reads on every Suggest call (see
+	// internal/framing/per_gp_observer.go and optout_store.go).
+	var optOutStore framing.OptOutStore
+	if devMode {
+		optOutStore = framing.NewInMemoryOptOutStore()
+	} else {
+		// Reuse the existing *sql.DB opened above for the substrate client
+		// / citation registry / evidence-trace emitter rather than opening
+		// a second pool against the same DSN.
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("kb-32: sql.Open(postgres) for opt-out store failed: %v", err)
+		}
+		optOutStore = framing.NewPostgresOptOutStore(db)
+	}
+	optOutHandler := api.NewOptOutHandler(optOutStore)
+
 	v1 := r.Group("/v1/craft")
 	v1.POST("/draft", handler.HandleDraft)
 
@@ -272,6 +294,23 @@ func main() {
 	)
 	v1Explain := r.Group("/v1/explain")
 	v1Explain.GET("/:decision_id", explainHandler.HandleExplain)
+
+	// -----------------------------------------------------------------------
+	// /v1/framing/optout/:gp_id — prescriber framing opt-out (Task 6)
+	//
+	// POST registers (or refreshes) an opt-out; DELETE revokes. Both are
+	// idempotent — see internal/api/optout_handlers.go for the per-status
+	// contract. Writes flow into the prescriber_framing_optout substrate
+	// (migration 047) that PerGPObserver.Suggest reads at Suggest time.
+	//
+	// TODO(phase-2-completion Task 7): wrap with permissions.Middleware
+	// alongside /v1/craft/draft and /v1/craft/override once the PDP
+	// enforcement task lands. Until then the routes are reachable to any
+	// authenticated caller and ingress filtering is the only access control.
+	// -----------------------------------------------------------------------
+	v1Framing := r.Group("/v1/framing")
+	v1Framing.POST("/optout/:gp_id", optOutHandler.HandleRegister)
+	v1Framing.DELETE("/optout/:gp_id", optOutHandler.HandleRevoke)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
