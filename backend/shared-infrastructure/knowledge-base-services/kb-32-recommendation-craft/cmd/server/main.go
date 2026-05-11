@@ -31,11 +31,14 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
+	"database/sql"
+
 	"github.com/cardiofit/kb32/internal/api"
 	"github.com/cardiofit/kb32/internal/citations"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
+	kb32pg "github.com/cardiofit/kb32/internal/store/postgres"
 	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
 )
@@ -115,9 +118,22 @@ func main() {
 	// for rule evaluation — snapshot assembly uses an in-memory placeholder that
 	// returns a minimal ClinicalSnapshot so the service starts and routes work).
 	//
-	// Production wiring: replace inMemorySubstrateClient with a Postgres-backed
-	// implementation that reads from the v2_substrate residents table.
-	substrateClient := &inMemorySubstrateClient{dsn: dsn}
+	// Production wiring: PostgresSubstrateClient reads kb-20-patient-profile
+	// data (scoring instruments, care-intensity, active concerns, capacity,
+	// lab entries) and assembles a ClinicalSnapshot. In dev mode the
+	// in-memory placeholder is retained so the service starts without a
+	// real DB attached. See internal/store/postgres/substrate_client.go for
+	// the kb-20 → ClinicalSnapshot mapping.
+	var substrateClient kb32ctx.SubstrateClient
+	if devMode {
+		substrateClient = &inMemorySubstrateClient{dsn: dsn}
+	} else {
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("kb-32: sql.Open(postgres) failed: %v", err)
+		}
+		substrateClient = kb32pg.NewPostgresSubstrateClient(db)
+	}
 	assembler := kb32ctx.NewAssembler(substrateClient)
 
 	// Stage 2: reasoning chain builder backed by the real HAPI client.
