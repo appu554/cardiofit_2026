@@ -45,6 +45,7 @@ import (
 	kb32pg "github.com/cardiofit/kb32/internal/store/postgres"
 	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
+	"github.com/cardiofit/shared/v2_substrate/permissions"
 )
 
 // cqlRuntimeURL is the base URL for the kb-cql-runtime HAPI endpoint.
@@ -89,6 +90,47 @@ func main() {
 	}
 
 	port := getenv("PORT", "8150")
+
+	// -----------------------------------------------------------------------
+	// Phase 2-completion Task 7: permissions middleware wiring
+	//
+	// When KB32_PERMISSIONS_ENFORCED=true, construct the Phase 1a
+	// permissions.Middleware over a Postgres-backed Store + DataConsentStore
+	// and wrap the craft routes (mirrors kb-30's pattern, see
+	// kb-30-authorisation-evaluator/cmd/server/main.go lines 94–128).
+	//
+	// Default OFF: when the env var is unset/false, permsMW stays nil and
+	// ginPermMW returns a passthrough so existing tests / dev boots that do
+	// not carry JWT viewer-role headers continue to work unchanged.
+	//
+	// Fail-closed at startup: if enforcement is requested but VAIDSHALA_DSN
+	// cannot be opened, log.Fatal — silently falling back to passthrough
+	// would be a security regression.
+	// -----------------------------------------------------------------------
+	var permsMW *permissions.Middleware
+	if strings.EqualFold(os.Getenv("KB32_PERMISSIONS_ENFORCED"), "true") {
+		permDB, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf(
+				"kb-32: KB32_PERMISSIONS_ENFORCED=true but sql.Open(postgres) "+
+					"for VAIDSHALA_DSN failed: %v", err,
+			)
+		}
+		if err := permDB.Ping(); err != nil {
+			log.Fatalf(
+				"kb-32: KB32_PERMISSIONS_ENFORCED=true but Ping VAIDSHALA_DSN "+
+					"for permissions store failed: %v", err,
+			)
+		}
+		permStore := permissions.NewPostgresStore(permDB)
+		consentStore := permissions.NewPostgresDataConsentStore(permDB)
+		permsMW = permissions.NewMiddleware(permStore, consentStore, nil /* NoopAuditEmitter */)
+		log.Printf("kb-32: permissions enforcement: ON (VAIDSHALA_DSN connected)")
+	} else {
+		log.Printf(
+			"kb-32: permissions enforcement: OFF (passthrough mode — DO NOT use in production)",
+		)
+	}
 
 	// -----------------------------------------------------------------------
 	// HTTP server setup
@@ -253,12 +295,25 @@ func main() {
 	optOutHandler := api.NewOptOutHandler(optOutStore)
 
 	v1 := r.Group("/v1/craft")
-	v1.POST("/draft", handler.HandleDraft)
+
+	// Phase 2-completion Task 7: PDP permissions middleware mounted over
+	// the two craft write routes. permsMW is nil when
+	// KB32_PERMISSIONS_ENFORCED is unset/false (ginPermMW returns a
+	// passthrough), preserving the existing dev/test boot semantics.
+	// PDP (Pharmacist-Default-Private) is the correct VisibilityClass for
+	// resident-clinical writes; see internal/api/permissions_middleware.go
+	// package doc for rationale (the kb-32 main.go pre-Task-7 TODOs at
+	// the old line 259 / 306 already named PDP as the target class).
+	v1.POST("/draft",
+		api.GinPermMW(permsMW, "kb32_craft_draft", permissions.PDP),
+		handler.HandleDraft,
+	)
 
 	// POST /v1/craft/override/:recommendation_id
-	// NOTE: PDP middleware NOT mounted — Phase 2-completion follow-up.
-	// See override_handlers.go package comment for deferral rationale.
-	v1.POST("/override/:recommendation_id", overrideHandler.HandleCapture)
+	v1.POST("/override/:recommendation_id",
+		api.GinPermMW(permsMW, "kb32_craft_override", permissions.PDP),
+		overrideHandler.HandleCapture,
+	)
 
 	// -----------------------------------------------------------------------
 	// /v1/explain/:decision_id — Layer 4 deep-audit endpoint
