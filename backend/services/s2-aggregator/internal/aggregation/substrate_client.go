@@ -37,6 +37,34 @@ type SubstrateClient interface {
 	// requires (120 days). Caller (BuildTrajectories) passes this to
 	// prn_velocity.Compute equivalents.
 	RecentPRNAdministrations(ctx context.Context, residentID uuid.UUID, class substrate_types.PRNClass, asOf time.Time) ([]substrate_types.PRNAdministration, error)
+
+	// PendingRecommendations returns the kb-32 generator.Packet rows that
+	// are currently in a non-terminal lifecycle state (detected, drafted,
+	// submitted, viewed) for this resident. Returns an empty slice (never
+	// nil) when none are pending.
+	PendingRecommendations(ctx context.Context, residentID uuid.UUID) ([]substrate_types.RecommendationPacket, error)
+
+	// RecommendationAssessment returns the 5-dimension appropriateness
+	// scores attached to a recommendation per kb-32 Phase 2-completion
+	// Task 2. Returns the zero Assessment when no assessment is on record.
+	RecommendationAssessment(ctx context.Context, recID uuid.UUID) (substrate_types.AssessmentScores, error)
+
+	// RecommendationCitations returns the fire-time citation pins per
+	// kb-32 Guidelines §6. Returns an empty slice when no citations are
+	// pinned (rare; usually indicates the packet pre-dates citation
+	// pinning).
+	RecommendationCitations(ctx context.Context, recID uuid.UUID) ([]substrate_types.Citation, error)
+
+	// RecommendationOverrides returns the override history for a
+	// recommendation per kb-32 Phase 2-completion Task 5. Ordering is
+	// chronological (oldest first). Empty slice when no overrides exist.
+	RecommendationOverrides(ctx context.Context, recID uuid.UUID) ([]substrate_types.OverrideReason, error)
+
+	// ActiveRestraintSignals returns all currently-active restraint
+	// signals for this resident. Phase 1 commitment per S2 v1.0 Part 7.3:
+	// the SubstrateClient MUST NOT filter signals based on transition
+	// criteria — that is informational-only in Phase 1.
+	ActiveRestraintSignals(ctx context.Context, residentID uuid.UUID) ([]substrate_types.RestraintSignal, error)
 }
 
 // Snapshot is the s2-aggregator's view of kb-20's ClinicalSnapshot. Fields
@@ -63,12 +91,25 @@ type inMemorySubstrateClient struct {
 	mu              sync.RWMutex
 	observations    []substrate_types.Observation
 	administrations []substrate_types.PRNAdministration
+
+	// Task 4 additions: pending-recommendation pipeline substrate.
+	packets         []substrate_types.RecommendationPacket
+	assessments     map[uuid.UUID]substrate_types.AssessmentScores
+	citations       map[uuid.UUID][]substrate_types.Citation
+	overrides       map[uuid.UUID][]substrate_types.OverrideReason
+	restraintByRes  map[uuid.UUID][]substrate_types.RestraintSignal
 }
 
 // NewInMemorySubstrateClient returns an empty in-memory fake. Use
-// WithObservations / WithAdministrations to seed it.
+// WithObservations / WithAdministrations / WithPackets / WithAssessment /
+// WithCitations / WithOverrides / WithRestraintSignals to seed it.
 func NewInMemorySubstrateClient() *inMemorySubstrateClient {
-	return &inMemorySubstrateClient{}
+	return &inMemorySubstrateClient{
+		assessments:    map[uuid.UUID]substrate_types.AssessmentScores{},
+		citations:      map[uuid.UUID][]substrate_types.Citation{},
+		overrides:      map[uuid.UUID][]substrate_types.OverrideReason{},
+		restraintByRes: map[uuid.UUID][]substrate_types.RestraintSignal{},
+	}
 }
 
 // WithObservations seeds the fake with observation rows. Returns the
@@ -141,6 +182,48 @@ func (c *inMemorySubstrateClient) TrajectoryHistory(_ context.Context, residentI
 	return out, nil
 }
 
+// WithPackets seeds the fake with kb-32 recommendation packets. Each
+// packet's SnapshotRef is used as the resident-id key for
+// PendingRecommendations lookup.
+func (c *inMemorySubstrateClient) WithPackets(pkts ...substrate_types.RecommendationPacket) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.packets = append(c.packets, pkts...)
+	return c
+}
+
+// WithAssessment seeds an appropriateness assessment for a recommendation.
+func (c *inMemorySubstrateClient) WithAssessment(recID uuid.UUID, a substrate_types.AssessmentScores) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.assessments[recID] = a
+	return c
+}
+
+// WithCitations seeds the citation pin set for a recommendation.
+func (c *inMemorySubstrateClient) WithCitations(recID uuid.UUID, cits ...substrate_types.Citation) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.citations[recID] = append(c.citations[recID], cits...)
+	return c
+}
+
+// WithOverrides seeds the override history for a recommendation.
+func (c *inMemorySubstrateClient) WithOverrides(recID uuid.UUID, ors ...substrate_types.OverrideReason) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.overrides[recID] = append(c.overrides[recID], ors...)
+	return c
+}
+
+// WithRestraintSignals seeds restraint signals for a resident.
+func (c *inMemorySubstrateClient) WithRestraintSignals(residentID uuid.UUID, sigs ...substrate_types.RestraintSignal) *inMemorySubstrateClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.restraintByRes[residentID] = append(c.restraintByRes[residentID], sigs...)
+	return c
+}
+
 // RecentPRNAdministrations implements SubstrateClient by returning the
 // (resident, class) administration stream over the trailing 120-day
 // window (matches prn_velocity.Compute's outer window per CAPE Guidelines).
@@ -158,5 +241,71 @@ func (c *inMemorySubstrateClient) RecentPRNAdministrations(_ context.Context, re
 			out = append(out, a)
 		}
 	}
+	return out, nil
+}
+
+// PendingRecommendations returns packets seeded for this resident. The
+// fake uses Packet.SnapshotRef as the resident-id key (matching kb-32's
+// generator.Generate behaviour of populating SnapshotRef from the
+// snapshot's ResidentID).
+func (c *inMemorySubstrateClient) PendingRecommendations(_ context.Context, residentID uuid.UUID) ([]substrate_types.RecommendationPacket, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	out := make([]substrate_types.RecommendationPacket, 0)
+	for _, p := range c.packets {
+		if p.SnapshotRef == residentID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// RecommendationAssessment returns the assessment seeded for recID, or
+// the zero AssessmentScores if none was seeded.
+func (c *inMemorySubstrateClient) RecommendationAssessment(_ context.Context, recID uuid.UUID) (substrate_types.AssessmentScores, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if a, ok := c.assessments[recID]; ok {
+		return a, nil
+	}
+	return substrate_types.AssessmentScores{}, nil
+}
+
+// RecommendationCitations returns the citations seeded for recID.
+func (c *inMemorySubstrateClient) RecommendationCitations(_ context.Context, recID uuid.UUID) ([]substrate_types.Citation, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	cits := c.citations[recID]
+	out := make([]substrate_types.Citation, len(cits))
+	copy(out, cits)
+	return out, nil
+}
+
+// RecommendationOverrides returns the override history seeded for recID,
+// chronological (oldest first).
+func (c *inMemorySubstrateClient) RecommendationOverrides(_ context.Context, recID uuid.UUID) ([]substrate_types.OverrideReason, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	ors := c.overrides[recID]
+	out := make([]substrate_types.OverrideReason, len(ors))
+	copy(out, ors)
+	sort.Slice(out, func(i, j int) bool { return out[i].CapturedAt.Before(out[j].CapturedAt) })
+	return out, nil
+}
+
+// ActiveRestraintSignals returns the restraint signals seeded for
+// residentID. Per S2 v1.0 Part 7.3 the fake does NOT filter by
+// transition criteria (advisory-only Phase 1 commitment).
+func (c *inMemorySubstrateClient) ActiveRestraintSignals(_ context.Context, residentID uuid.UUID) ([]substrate_types.RestraintSignal, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	sigs := c.restraintByRes[residentID]
+	out := make([]substrate_types.RestraintSignal, len(sigs))
+	copy(out, sigs)
 	return out, nil
 }
