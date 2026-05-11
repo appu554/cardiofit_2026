@@ -36,12 +36,103 @@ const (
 // pharmacist actions, and (c) cohere events into a single session for audit.
 //
 // AsOf supports time-travel queries; default is time.Now() at call site.
+//
+// EntryMetadata carries the entry-path context produced by the handlers
+// in internal/entry_paths (Task 2 of the build plan). It is required for
+// view assembly so that the CAPE context band, notification context band,
+// and comparative mode can render per v1.0 Part 4.1. When EntryMetadata
+// is the zero value, view assembly treats the request as if it arrived
+// via EntryPathSearch with no context to surface.
 type WorkspaceRequest struct {
-	ResidentID   uuid.UUID
-	EntryPath    EntryPath
+	ResidentID    uuid.UUID
+	EntryPath     EntryPath
+	PharmacistID  uuid.UUID
+	SessionID     uuid.UUID
+	AsOf          time.Time
+	EntryMetadata EntryPathMetadata
+}
+
+// EntryContext is the polymorphic per-path context carried in
+// EntryPathMetadata. Each of the four entry paths supplies a concrete
+// implementation that names the path it belongs to via Kind().
+//
+// Concrete implementations live in this package so they can be referenced
+// by both the entry-path handlers (internal/entry_paths) and the CAPE
+// context band renderer without import cycles.
+type EntryContext interface {
+	// Kind returns the EntryPath this context corresponds to.
+	Kind() EntryPath
+}
+
+// EntryPathMetadata is the v1.0 Part 3.5 audit record produced by each
+// entry-path handler. It carries entry context into workspace assembly
+// so that downstream view-builders can surface the appropriate top-band.
+type EntryPathMetadata struct {
+	TriggeredAt  time.Time
 	PharmacistID uuid.UUID
-	SessionID    uuid.UUID
-	AsOf         time.Time
+	ResidentID   uuid.UUID
+	Path         EntryPath
+	Context      EntryContext
+}
+
+// WorklistContext carries CAPE prioritisation signals per v1.0 Part 4.1
+// Component 2 (CAPE context band).
+//
+// TODO(kb-33 Step 5 integration): replace stub fields with actual CAPE
+// outputs from kb-33-triage-engine. The real shape — including dimension
+// score breakdowns, instability chronology link, and substrate references
+// — lives in kb-33, which is not yet built.
+type WorklistContext struct {
+	PrimarySignals []string
+	CAPEScore      float64
+	TriagedAt      time.Time
+}
+
+// Kind implements EntryContext.
+func (WorklistContext) Kind() EntryPath { return EntryPathWorklist }
+
+// SearchContext carries the search query that brought the pharmacist to
+// this resident per v1.0 Part 3.2.
+type SearchContext struct {
+	Query     string
+	MatchedAt time.Time
+}
+
+// Kind implements EntryContext.
+func (SearchContext) Kind() EntryPath { return EntryPathSearch }
+
+// NotificationContext carries the in-app or email notification that
+// dispatched the pharmacist to S2 per v1.0 Part 3.3.
+type NotificationContext struct {
+	NotificationID uuid.UUID
+	ReasonText     string
+	DispatchedAt   time.Time
+}
+
+// Kind implements EntryContext.
+func (NotificationContext) Kind() EntryPath { return EntryPathNotification }
+
+// CrossReferenceContext carries the origin resident and reason for a
+// cross-reference entry per v1.0 Part 3.4.
+type CrossReferenceContext struct {
+	OriginResidentID uuid.UUID
+	ReasonCode       string
+}
+
+// Kind implements EntryContext.
+func (CrossReferenceContext) Kind() EntryPath { return EntryPathCrossReference }
+
+// SubstrateRef is the verification-not-belief anchor per v1.0 Part 10:
+// every claim rendered in S2 carries at least one SubstrateRef back to
+// the underlying observation, recommendation, or audit row.
+//
+// Source names the substrate origin (e.g., "kb-20", "kb-32", "kb-33").
+// ID is the substrate row identifier. Description is a short
+// human-readable label for the substrate object.
+type SubstrateRef struct {
+	Source      string
+	ID          uuid.UUID
+	Description string
 }
 
 // View is the marker interface implemented by all five Layer*View types so
