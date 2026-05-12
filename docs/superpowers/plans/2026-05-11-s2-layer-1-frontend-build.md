@@ -1,4 +1,26 @@
-# S2 Layer 1 Frontend — Build Plan
+# ⚠️ SUPERSEDED — DO NOT USE — never merged to main
+
+> **This plan is superseded by `docs/superpowers/plans/S2_Frontend_Build_Plan.md`** (1000 lines, tracked on main via merge commit `8b757834`). Authored by claude-opus-4-7 session 2026-05-11 without first checking for the canonical frontend plan that already existed untracked on disk — same failure mode as the 2026-05-11 S2/S3/RMMR specs banner-flagged on `c7be8701`.
+>
+> **This file lives only on branch `feat/s2-layer-1-frontend` (commit `5fbfae02`); the branch is NOT merged to main and will not be. Preserved here as audit trail of the failure mode.**
+>
+> **Why this plan is wrong vs the canonical:**
+> 1. No Phase 0 primitives commitment. Canonical commits to 8 shared primitives FIRST (Weeks 1–3) before any of the 14 v1.0 Part 15 components. This plan goes straight to scaffold → API client → components. Without Phase 0, mobile form-factor decisions, citation discipline, and audit trail rendering get retrofitted across 14 components at 2–3x the upfront cost.
+> 2. Agent-execution sizing vs human engineering team. Canonical is calibrated to two senior React engineers (10-year average) with engineer-week estimates and phase gate criteria. This plan is 15 sequential agent-dispatch tasks.
+> 3. No explicit mobile interaction patterns. Canonical Part 6.2 specifies hover→tap-to-pin, modal→bottom-sheet, side-panel→bottom-tab-navigation, tooltip→inline-expansion. This plan says "mobile responsive" without patterns.
+> 4. Missing companion document references. Canonical references `Artefact-Per-Surface with Role-Views Addendum` and `Frictionless Citation Design Implementation Proposal + Supplemental` — load-bearing for EvidenceChain (Primitive 2) and CitationSurface (Primitive 3). Those docs are NOT on disk anywhere in the repo as of 2026-05-11; the canonical plan needs them surfaced before Phase 0 execution. This plan didn't know they existed.
+> 5. No backend coordination dates. Canonical Part 7.4 specifies form-factor adapter by frontend Week 4–5 and override taxonomy by Week 8.
+> 6. Over-prescriptive on file structure, state management, styling. Canonical Part 12.3 explicitly leaves these as engineer decisions.
+>
+> **Do not implement against this plan. See `S2_Frontend_Build_Plan.md` for the canonical specification.**
+>
+> ---
+>
+> _Original content preserved below for audit trail only._
+
+---
+
+# S2 Layer 1 Frontend — Build Plan (SUPERSEDED)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development`. Steps use checkbox (`- [ ]`) syntax. Frontend tasks dispatch to `frontend-architect` (not `backend-architect`).
 
